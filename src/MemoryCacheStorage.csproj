@@ -1,28 +1,42 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+	<!-- App properties -->
 	<PropertyGroup>
 		<TargetFramework>net6.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		<PackageId>CypherPotato.MemoryCacheStorage</PackageId>
-		<Title>MemoryCacheStorage</Title>
-		<Version>1.2.0</Version>
 
 		<Authors>CypherPotato</Authors>
 		<Company>CypherPotato</Company>
 		<Product>MemoryCacheStorage</Product>
 		<Description>Provides a simple, fast, and low-frequency way to cache objects thread-safely.</Description>
-		<PackageIcon>icon.png</PackageIcon>
-		<PackageReadmeFile>readme.md</PackageReadmeFile>
 		<RepositoryUrl>https://github.com/CypherPotato/MemoryCacheStorage</RepositoryUrl>
-		<PackageLicenseFile>LICENSE</PackageLicenseFile>
-		<IncludeSymbols>True</IncludeSymbols>
-		<PackageProjectUrl>https://github.com/CypherPotato/MemoryCacheStorage</PackageProjectUrl>
 		<AssemblyName>CacheStorage</AssemblyName>
 		<RootNamespace>CacheStorage</RootNamespace>
 	</PropertyGroup>
 
+	<!-- Package info -->
+	<PropertyGroup>
+		<GenerateDocumentationFile>True</GenerateDocumentationFile>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+		<PackageId>CypherPotato.MemoryCacheStorage</PackageId>
+		<Title>MemoryCacheStorage</Title>
+		<PackageIcon>icon.png</PackageIcon>
+		<PackageReadmeFile>readme.md</PackageReadmeFile>
+		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+		<IncludeSymbols>True</IncludeSymbols>
+		<PackageProjectUrl>https://github.com/CypherPotato/MemoryCacheStorage</PackageProjectUrl>
+		<SymbolPackageFormat>symbols.nupkg</SymbolPackageFormat>
+	</PropertyGroup>
+	
+	<!-- Versions -->
+	<PropertyGroup>
+		<Version>1.2.2</Version>
+		<AssemblyVersion>1.2.2</AssemblyVersion>
+		<FileVersion>1.2.2</FileVersion>
+	</PropertyGroup>
+
+	<!-- Package files -->
 	<ItemGroup>
 		<None Include="..\.assets\icon.png">
 			<Pack>True</Pack>
@@ -32,7 +46,7 @@
 			<Pack>True</Pack>
 			<PackagePath>\</PackagePath>
 		</None>
-		<None Update="..\readme.md">
+		<None Include="..\readme.md">
 			<Pack>True</Pack>
 			<PackagePath>\</PackagePath>
 		</None>

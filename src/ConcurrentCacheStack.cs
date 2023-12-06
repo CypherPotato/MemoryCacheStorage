@@ -38,7 +38,9 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         }
     }
 
-    private CacheItem<TKey, TValue> GetItem(TKey key)
+    private ICollection<CacheItem<TKey, TValue>> GetBag() => new List<CacheItem<TKey, TValue>>();
+
+    private CacheItem<TKey, TValue> UnsafeGetItem(TKey key)
     {
         foreach (var cacheItem in items)
         {
@@ -48,7 +50,7 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         return CacheItem<TKey, TValue>.Default;
     }
 
-    private IEnumerable<CacheItem<TKey, TValue>> GetItems(TKey key)
+    private IEnumerable<CacheItem<TKey, TValue>> UnsafeGetItems(TKey key)
     {
         foreach (var cacheItem in items)
         {
@@ -57,15 +59,10 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         }
     }
 
-    private void InsertItem(CacheItem<TKey, TValue> cacheItem)
+    private void UnsafeAdd(CacheItem<TKey, TValue> cacheItem)
     {
         if (cacheItem.Keys.Length == 0) throw new ArgumentException("A cache item must have at least one id.");
         items.Add(cacheItem);
-    }
-
-    private void RemoveItem(CacheItem<TKey, TValue> cacheItem)
-    {
-        items.Remove(cacheItem);
     }
 
     public async Task<TAsyncResult> AcquireAsyncFunction<TAsyncResult>(Func<TAsyncResult> function)
@@ -105,11 +102,19 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         asyncSemaphore.Wait();
         try
         {
-            InsertItem(cItem);
+            UnsafeAdd(cItem);
         }
         finally
         {
             asyncSemaphore.Release();
+        }
+    }
+
+    private void UnsafeCollect(IEnumerable<CacheItem<TKey, TValue>> toRemove)
+    {
+        foreach(var item in toRemove)
+        {
+            items.Remove(item);
         }
     }
 
@@ -132,10 +137,7 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
                 }
             }
 
-            foreach (var tRem in toRemove)
-            {
-                RemoveItem(tRem);
-            }
+            UnsafeCollect(toRemove);
 
             return toRemove.Count;
         }
@@ -162,18 +164,20 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
     {
         ArgumentNullException.ThrowIfNull(identifier);
         asyncSemaphore.Wait();
+        var removeBag = GetBag();
         try
         {
-            var item = GetItem(identifier);
+            var item = UnsafeGetItem(identifier);
             if (DateTime.Now > item.ExpiresAt)
             {
-                RemoveItem(item);
+                removeBag.Add(item);
                 return CacheItem<TKey, TValue>.Default;
             }
             else return item;
         }
         finally
         {
+            UnsafeCollect(removeBag);
             asyncSemaphore.Release();
         }
     }
@@ -182,20 +186,22 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
     {
         ArgumentNullException.ThrowIfNull(identifier);
         asyncSemaphore.Wait();
+        var removeBag = GetBag();
         try
         {
-            var values = GetItems(identifier);
+            var values = UnsafeGetItems(identifier);
             foreach (var item in values)
             {
                 if (DateTime.Now > item.ExpiresAt)
                 {
-                    RemoveItem(item);
+                    removeBag.Add(item);
                 }
                 yield return CacheItem<TKey, TValue>.Default;
             }
         }
         finally
         {
+            UnsafeCollect(removeBag);
             asyncSemaphore.Release();
         }
     }
@@ -203,6 +209,7 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
     public IEnumerable<CacheItem<TKey, TValue>> Match(Func<TKey[], bool> predicate)
     {
         asyncSemaphore.Wait();
+        var removeBag = GetBag();
         try
         {
             foreach (var item in items)
@@ -211,7 +218,7 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
                 {
                     if (DateTime.Now > item.ExpiresAt)
                     {
-                        RemoveItem(item);
+                        removeBag.Add(item);
                     }
                     else yield return item;
                 }
@@ -219,6 +226,7 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         }
         finally
         {
+            UnsafeCollect(removeBag);
             asyncSemaphore.Release();
         }
     }
@@ -227,20 +235,22 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
     {
         ArgumentNullException.ThrowIfNull(identifier);
         asyncSemaphore.Wait();
+        var removeBag = GetBag();
         try
         {
-            var item = GetItem(identifier);
+            var item = UnsafeGetItem(identifier);
             if(item.Keys.Length == 0)
             {
                 return 0;
             } else
             {
-                RemoveItem(item);
+                removeBag.Add(item);
                 return 1;
             }
         }
         finally
         {
+            UnsafeCollect(removeBag);
             asyncSemaphore.Release();
         }
     }
@@ -249,19 +259,21 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
     {
         int r = 0;
         asyncSemaphore.Wait();
+        var removeBag = GetBag();
         try
         {
             foreach (var item in items)
             {
                 if (predicate(item.Keys))
                 {
-                    RemoveItem(item);
+                    removeBag.Add(item);
                     r++;
                 }
             }
         }
         finally
         {
+            UnsafeCollect(removeBag);
             asyncSemaphore.Release();
         }
         return r;
