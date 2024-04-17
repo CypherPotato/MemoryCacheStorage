@@ -69,6 +69,56 @@ namespace CypherPotato
 
         #region SETTERS
         /// <summary>
+        /// Renews the expiration time of all items that contain one or more of the entered IDs.
+        /// </summary>
+        /// <param name="ids">The list of IDs to look for on items to renew.</param>
+        /// <param name="newExpiration">The new expiration date and time.</param>
+        /// <returns>The count of renewed cached items.</returns>
+        public int Renew(TKey[] ids, DateTime newExpiration)
+        {
+            int n = 0;
+            cacheStack.Invoke(() =>
+            {
+                foreach (var id in ids)
+                {
+                    n += cacheStack.UnsafeRenewSingle(id, newExpiration);
+                }
+            });
+            return n;
+        }
+
+        /// <summary>
+        /// Renews the expiration time of all items that contains the specified id.
+        /// </summary>
+        /// <param name="id">The ID which the items has to renew.</param>
+        /// <param name="newExpiration">The new expiration date and time.</param>
+        /// <returns>The count of renewed cached items.</returns>
+        public int Renew(TKey id, DateTime newExpiration)
+        {
+            int n = 0;
+            cacheStack.Invoke(() =>
+            {
+                n += cacheStack.UnsafeRenewSingle(id, newExpiration);
+            });
+            return n;
+        }
+
+        /// <summary>
+        /// Renews the expiration time of all items that contains the specified id with the default expiration time.
+        /// </summary>
+        /// <param name="id">The ID which the items has to renew.</param>
+        /// <returns>The count of renewed cached items.</returns>
+        public int Renew(TKey id)
+        {
+            int n = 0;
+            cacheStack.Invoke(() =>
+            {
+                n += cacheStack.UnsafeRenewSingle(id, DateTime.Now + DefaultExpiration);
+            });
+            return n;
+        }
+
+        /// <summary>
         /// Adds an item to the cache with the specified IDs, value, and expiration time.
         /// </summary>
         /// <param name="ids">The array of cache keys.</param>
@@ -130,7 +180,7 @@ namespace CypherPotato
         /// <param name="expiresAt">The expiration time for the cached item.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         public async Task AddAsync(TKey[] ids, TValue value, DateTime expiresAt)
-            => await cacheStack.AcquireAsyncVoid(() => Add(ids, value, expiresAt));
+            => await Task.Run(() => Add(ids, value, expiresAt));
 
         /// <summary>
         /// Asynchronously adds an item to the cache with the specified IDs, value, and time to live.
@@ -140,7 +190,7 @@ namespace CypherPotato
         /// <param name="timeToLive">The time to live for the cached item.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         public async Task AddAsync(TKey[] ids, TValue value, TimeSpan timeToLive)
-            => await cacheStack.AcquireAsyncVoid(() => Add(ids, value, timeToLive));
+            => await Task.Run(() => Add(ids, value, timeToLive));
 
         /// <summary>
         /// Asynchronously adds an item to the cache with the specified ID, value, and expiration time.
@@ -150,7 +200,7 @@ namespace CypherPotato
         /// <param name="expiresAt">The expiration time for the cached item.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         public async Task AddAsync(TKey id, TValue value, DateTime expiresAt)
-            => await cacheStack.AcquireAsyncVoid(() => Add(id, value, expiresAt));
+            => await Task.Run(() => Add(id, value, expiresAt));
 
         /// <summary>
         /// Asynchronously adds an item to the cache with the specified ID, value, and time to live.
@@ -160,7 +210,7 @@ namespace CypherPotato
         /// <param name="timeToLive">The time to live for the cached item.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         public async Task AddAsync(TKey id, TValue value, TimeSpan timeToLive)
-            => await cacheStack.AcquireAsyncVoid(() => Add(id, value, timeToLive));
+            => await Task.Run(() => Add(id, value, timeToLive));
 
         /// <summary>
         /// Asynchronously adds an item to the cache with the specified ID, value, and default expiration time.
@@ -169,7 +219,7 @@ namespace CypherPotato
         /// <param name="value">The value to be cached.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         public async Task AddAsync(TKey id, TValue value)
-            => await cacheStack.AcquireAsyncVoid(() => Add(id, value, DefaultExpiration));
+            => await Task.Run(() => Add(id, value, DefaultExpiration));
         #endregion
 
         #region GETTERS
@@ -223,7 +273,7 @@ namespace CypherPotato
         /// <param name="matchId">The cache key to match.</param>
         /// <returns>A task representing the asynchronous operation, containing the value associated with the key, or <c>null</c> if the key is not found.</returns>
         public async Task<TValue?> GetAsync(TKey matchId)
-            => await cacheStack.AcquireAsyncFunction(() => Get(matchId));
+            => await Task.Run(() => Get(matchId));
 
         /// <summary>
         /// Asynchronously gets all values associated with the specified key from the cache.
@@ -231,7 +281,7 @@ namespace CypherPotato
         /// <param name="matchId">The cache key to match.</param>
         /// <returns>A task representing the asynchronous operation, containing an enumerable collection of values associated with the key.</returns>
         public async Task<IEnumerable<TValue>> GetAllAsync(TKey matchId)
-            => await cacheStack.AcquireAsyncFunction(() => GetAll(matchId));
+            => await Task.Run(() => GetAll(matchId));
 
         /// <summary>
         /// Asynchronously gets all values that satisfy the specified predicate from the cache.
@@ -239,7 +289,7 @@ namespace CypherPotato
         /// <param name="predicate">The predicate function to filter keys.</param>
         /// <returns>A task representing the asynchronous operation, containing an enumerable collection of values that satisfy the predicate.</returns>
         public async Task<IEnumerable<TValue>> GetAllAsync(Func<TKey[], bool> predicate)
-            => await cacheStack.AcquireAsyncFunction(() => GetAll(predicate));
+            => await Task.Run(() => GetAll(predicate));
         #endregion
 
         #region REMOVERS
@@ -286,7 +336,7 @@ namespace CypherPotato
         /// <param name="matchId">The cache key to match.</param>
         /// <returns>A task representing the asynchronous operation, containing the number of items removed from the cache (0 or 1).</returns>
         public async Task<int> RemoveAsync(TKey matchId)
-            => await cacheStack.AcquireAsyncFunction(() => Remove(matchId));
+            => await Task.Run(() => Remove(matchId));
 
         /// <summary>
         /// Asynchronously removes all values that satisfy the specified predicate from the cache.
@@ -294,14 +344,14 @@ namespace CypherPotato
         /// <param name="predicate">The predicate function to filter keys.</param>
         /// <returns>A task representing the asynchronous operation, containing the number of items removed from the cache.</returns>
         public async Task<int> RemoveAsync(Func<TKey[], bool> predicate)
-            => await cacheStack.AcquireAsyncFunction(() => Remove(predicate));
+            => await Task.Run(() => Remove(predicate));
 
         /// <summary>
         /// Asynchronously removes all expired items from the cache.
         /// </summary>
         /// <returns>A task representing the asynchronous operation, containing the number of items removed from the cache.</returns>
         public async Task<int> CollectAsync()
-            => await cacheStack.AcquireAsyncFunction(() => Collect());
+            => await Task.Run(() => Collect());
         #endregion
 
         #region FUNCTION HELPERS

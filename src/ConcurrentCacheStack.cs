@@ -16,26 +16,13 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
 
     public ConcurrentCacheStack(TimeSpan _t)
     {
-        timerInterval = _t;
-        timer = new Timer(new TimerCallback(CollectInternal), null, TimeSpan.Zero, timerInterval);
         asyncSemaphore = new SemaphoreSlim(1);
+        timerInterval = _t;
+        timer = new Timer(new TimerCallback(CollectInternal), null, timerInterval, timerInterval);
     }
 
     public ConcurrentCacheStack() : this(TimeSpan.FromSeconds(3))
     {
-    }
-
-    public async Task AcquireAsyncVoid(Action function)
-    {
-        await asyncSemaphore.WaitAsync();
-        try
-        {
-            function();
-        }
-        finally
-        {
-            asyncSemaphore.Release();
-        }
     }
 
     private ICollection<CacheItem<TKey, TValue>> GetBag() => new List<CacheItem<TKey, TValue>>();
@@ -65,27 +52,25 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         items.Add(cacheItem);
     }
 
-    public async Task<TAsyncResult> AcquireAsyncFunction<TAsyncResult>(Func<TAsyncResult> function)
-    {
-        TAsyncResult result;
-        await asyncSemaphore.WaitAsync();
-        try
-        {
-            result = function();
-        }
-        finally
-        {
-            asyncSemaphore.Release();
-        }
-        return result;
-    }
-
     public int Count()
     {
         asyncSemaphore.Wait();
         try
         {
-            return items.Count;
+            int count = items.Count;
+
+            List<CacheItem<TKey, TValue>> toRemove = new();
+            foreach (var item in items)
+            {
+                if (DateTime.Now > item.ExpiresAt)
+                {
+                    toRemove.Add(item);
+                }
+            }
+
+            UnsafeCollect(toRemove);
+
+            return count - toRemove.Count;
         }
         finally
         {
@@ -112,7 +97,7 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
 
     private void UnsafeCollect(IEnumerable<CacheItem<TKey, TValue>> toRemove)
     {
-        foreach(var item in toRemove)
+        foreach (var item in toRemove)
         {
             items.Remove(item);
         }
@@ -158,6 +143,33 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         {
             asyncSemaphore.Release();
         }
+    }
+
+    public void Invoke(Action action)
+    {
+        asyncSemaphore.Wait();
+        try
+        {
+            action();
+        }
+        finally
+        {
+            asyncSemaphore.Release();
+        }
+    }
+
+    public int UnsafeRenewSingle(TKey identifier, DateTime value)
+    {
+        int c = 0;
+        foreach (var item in items)
+        {
+            if (item.Keys.Contains(identifier))
+            {
+                item.Renew(value);
+                c++;
+            }
+        }
+        return c;
     }
 
     public CacheItem<TKey, TValue> FirstMatch(TKey identifier)
@@ -239,10 +251,11 @@ internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : not
         try
         {
             var item = UnsafeGetItem(identifier);
-            if(item.Keys.Length == 0)
+            if (item.Keys.Length == 0)
             {
                 return 0;
-            } else
+            }
+            else
             {
                 removeBag.Add(item);
                 return 1;
