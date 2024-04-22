@@ -44,7 +44,12 @@ namespace CypherPotato
         /// <summary>
         /// Gets the count of items in the cache.
         /// </summary>
-        public int Count { get => cacheStack.Count(); }
+        public int Count { get => cacheStack.SafeCount(); }
+
+        /// <summary>
+        /// Gets the <see cref="IComparer{T}"/> for the key comparer.
+        /// </summary>
+        public IComparer<TKey>? KeyComparer { get => cacheStack.kcomparer; }
 
         #region CONSTRUCTORS
         /// <summary>
@@ -52,7 +57,16 @@ namespace CypherPotato
         /// </summary>
         public MemoryCacheStorage()
         {
-            cacheStack = new ConcurrentCacheStack<TKey, TValue>();
+            cacheStack = new ConcurrentCacheStack<TKey, TValue>(TimeSpan.FromSeconds(30), null);
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MemoryCacheStorage{TKey, TValue}"/> class with default settings.
+        /// </summary>
+        /// <param name="keyComparer">The <see cref="IComparer{T}"/> to comparing key values.</param>
+        public MemoryCacheStorage(IComparer<TKey> keyComparer)
+        {
+            cacheStack = new ConcurrentCacheStack<TKey, TValue>(TimeSpan.FromSeconds(30), keyComparer);
         }
 
         /// <summary>
@@ -63,7 +77,19 @@ namespace CypherPotato
         public MemoryCacheStorage(TimeSpan collectPoolInterval, TimeSpan defaultExpiration)
         {
             DefaultExpiration = defaultExpiration;
-            cacheStack = new ConcurrentCacheStack<TKey, TValue>(collectPoolInterval);
+            cacheStack = new ConcurrentCacheStack<TKey, TValue>(collectPoolInterval, null);
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MemoryCacheStorage{TKey, TValue}"/> class with the specified parameters.
+        /// </summary>
+        /// <param name="keyComparer">The <see cref="IComparer{T}"/> to comparing key values.</param>
+        /// <param name="collectPoolInterval">The interval for collecting expired items from the cache pool.</param>
+        /// <param name="defaultExpiration">The default expiration time for items in the cache.</param>
+        public MemoryCacheStorage(IComparer<TKey> keyComparer, TimeSpan collectPoolInterval, TimeSpan defaultExpiration)
+        {
+            DefaultExpiration = defaultExpiration;
+            cacheStack = new ConcurrentCacheStack<TKey, TValue>(collectPoolInterval, keyComparer);
         }
         #endregion
 
@@ -77,10 +103,11 @@ namespace CypherPotato
         public int Renew(TKey[] ids, DateTime newExpiration)
         {
             int n = 0;
-            cacheStack.Invoke(() =>
+            cacheStack.SafeInvoke(() =>
             {
-                foreach (var id in ids)
+                for (int i = 0; i < ids.Length; i++)
                 {
+                    var id = ids[i];
                     n += cacheStack.UnsafeRenewSingle(id, newExpiration);
                 }
             });
@@ -96,7 +123,7 @@ namespace CypherPotato
         public int Renew(TKey id, DateTime newExpiration)
         {
             int n = 0;
-            cacheStack.Invoke(() =>
+            cacheStack.SafeInvoke(() =>
             {
                 n += cacheStack.UnsafeRenewSingle(id, newExpiration);
             });
@@ -111,7 +138,7 @@ namespace CypherPotato
         public int Renew(TKey id)
         {
             int n = 0;
-            cacheStack.Invoke(() =>
+            cacheStack.SafeInvoke(() =>
             {
                 n += cacheStack.UnsafeRenewSingle(id, DateTime.Now + DefaultExpiration);
             });
@@ -126,7 +153,7 @@ namespace CypherPotato
         /// <param name="expiresAt">The expiration time for the cached item.</param>
         public void Add(TKey[] ids, TValue value, DateTime expiresAt)
         {
-            cacheStack.Add(ids, value, expiresAt);
+            cacheStack.SafeAdd(ids, value, expiresAt);
         }
 
         /// <summary>
@@ -230,7 +257,7 @@ namespace CypherPotato
         /// <returns>The value associated with the key, or <c>null</c> if the key is not found.</returns>
         public TValue? Get(TKey matchId)
         {
-            var match = cacheStack.FirstMatch(matchId);
+            var match = cacheStack.SafeFirstMatch(matchId);
             return match.Value;
         }
 
@@ -241,7 +268,7 @@ namespace CypherPotato
         /// <returns>An enumerable collection of values associated with the key.</returns>
         public IEnumerable<TValue> GetAll(TKey matchId)
         {
-            return cacheStack.AllMatch(matchId).Select(s => s.Value!);
+            return cacheStack.SafeAllMatch(matchId).Select(s => s.Value!);
         }
 
         /// <summary>
@@ -251,7 +278,7 @@ namespace CypherPotato
         /// <returns>An enumerable collection of values that satisfy the predicate.</returns>
         public IEnumerable<TValue> GetAll(Func<TKey[], bool> predicate)
         {
-            return cacheStack.Match(predicate).Select(s => s.Value!);
+            return cacheStack.SafeMatch(predicate).Select(s => s.Value!);
         }
 
         /// <summary>
@@ -262,7 +289,7 @@ namespace CypherPotato
         /// <returns><c>true</c> if the key is found; otherwise, <c>false</c>.</returns>
         public bool TryGet(TKey matchId, out TValue? value)
         {
-            var match = cacheStack.FirstMatch(matchId);
+            var match = cacheStack.SafeFirstMatch(matchId);
             value = match.Value;
             return match.Keys.Length > 0;
         }
@@ -297,10 +324,10 @@ namespace CypherPotato
         /// Removes the value associated with the specified key from the cache.
         /// </summary>
         /// <param name="matchId">The cache key to match.</param>
-        /// <returns>The number of items removed from the cache (0 or 1).</returns>
+        /// <returns>The number of items removed from the cache.</returns>
         public int Remove(TKey matchId)
         {
-            return cacheStack.Remove(matchId);
+            return cacheStack.SafeRemove(matchId);
         }
 
         /// <summary>
@@ -310,7 +337,7 @@ namespace CypherPotato
         /// <returns>The number of items removed from the cache.</returns>
         public int Remove(Func<TKey[], bool> predicate)
         {
-            return cacheStack.Remove(predicate);
+            return cacheStack.SafeRemove(predicate);
         }
 
         /// <summary>
@@ -319,7 +346,7 @@ namespace CypherPotato
         /// <returns>The number of items removed from the cache.</returns>
         public int Collect()
         {
-            return cacheStack.Collect();
+            return cacheStack.SafeCollect();
         }
 
         /// <summary>
@@ -327,7 +354,7 @@ namespace CypherPotato
         /// </summary>
         public void Clear()
         {
-            cacheStack.Clear();
+            cacheStack.SafeClear();
         }
 
         /// <summary>

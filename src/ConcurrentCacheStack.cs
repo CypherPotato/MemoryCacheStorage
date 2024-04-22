@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -9,300 +11,246 @@ namespace CypherPotato;
 
 internal class ConcurrentCacheStack<TKey, TValue> : IDisposable where TKey : notnull
 {
+    private bool _disposed = false;
     private List<CacheItem<TKey, TValue>> items = new();
-    private SemaphoreSlim asyncSemaphore;
+    internal IComparer<TKey>? kcomparer = null;
     internal Timer timer;
     internal readonly TimeSpan timerInterval;
 
-    public ConcurrentCacheStack(TimeSpan _t)
+    public ConcurrentCacheStack(TimeSpan poolingInterval, IComparer<TKey>? comparer)
     {
-        asyncSemaphore = new SemaphoreSlim(1);
-        timerInterval = _t;
-        timer = new Timer(new TimerCallback(CollectInternal), null, timerInterval, timerInterval);
+        timerInterval = poolingInterval;
+        timer = new Timer(new TimerCallback(TimerCollectCallback), null, timerInterval, timerInterval);
+        this.kcomparer = comparer;
     }
 
-    public ConcurrentCacheStack() : this(TimeSpan.FromSeconds(3))
+    private IList<CacheItem<TKey, TValue>> GetBag() => new List<CacheItem<TKey, TValue>>();
+
+    void CheckIfDisposed()
     {
+        if (_disposed) throw new InvalidOperationException("Cannot access, modify or delete an disposed concurrent cache stack.");
     }
 
-    private ICollection<CacheItem<TKey, TValue>> GetBag() => new List<CacheItem<TKey, TValue>>();
-
-    private CacheItem<TKey, TValue> UnsafeGetItem(TKey key)
+    private int UnsafeCollectExpired()
     {
-        foreach (var cacheItem in items)
+        CheckIfDisposed();
+        var bag = GetBag();
+        var span = CollectionsMarshal.AsSpan(items);
+        ref var pointer = ref MemoryMarshal.GetReference(span);
+        for (int i = 0; i < span.Length; i++)
         {
-            int search = Array.BinarySearch(cacheItem.Keys, key);
-            if (search >= 0) return cacheItem;
+            var item = Unsafe.Add(ref pointer, i);
+            if (item.IsExpired())
+            {
+                bag.Add(item);
+            }
         }
-        return CacheItem<TKey, TValue>.Default;
+
+        UnsafeCollect(bag);
+
+        return bag.Count;
+    }
+
+    private void UnsafeCollect(IList<CacheItem<TKey, TValue>> toRemove)
+    {
+        CheckIfDisposed();
+        for (int i = 0; i < toRemove.Count; i++)
+        {
+            items.Remove(toRemove[i]);
+        }
+    }
+
+    private ref CacheItem<TKey, TValue> UnsafeGetItem(TKey key)
+    {
+        CheckIfDisposed();
+        var span = CollectionsMarshal.AsSpan(items);
+        ref var pointer = ref MemoryMarshal.GetReference(span);
+        for (int i = 0; i < span.Length; i++)
+        {
+            ref var item = ref Unsafe.Add(ref pointer, i);
+            if (!item.IsExpired() && item.IsDefined(key))
+            {
+                return ref item;
+            }
+        }
+
+        return ref CacheItem<TKey, TValue>.Default;
     }
 
     private IEnumerable<CacheItem<TKey, TValue>> UnsafeGetItems(TKey key)
     {
-        foreach (var cacheItem in items)
+        CheckIfDisposed();
+        var bag = GetBag();
+        var span = CollectionsMarshal.AsSpan(items);
+        ref var pointer = ref MemoryMarshal.GetReference(span);
+        for (int i = 0; i < span.Length; i++)
         {
-            int search = Array.BinarySearch(cacheItem.Keys, key);
-            if (search >= 0) yield return cacheItem;
+            ref var item = ref Unsafe.Add(ref pointer, i);
+            if (!item.IsExpired() && item.IsDefined(key))
+            {
+                bag.Add(item);
+            }
         }
+
+        return bag;
     }
 
     private void UnsafeAdd(CacheItem<TKey, TValue> cacheItem)
     {
+        CheckIfDisposed();
         if (cacheItem.Keys.Length == 0) throw new ArgumentException("A cache item must have at least one id.");
         items.Add(cacheItem);
     }
 
-    public int Count()
+    public int UnsafeRenewSingle(TKey identifier, DateTime value)
     {
-        asyncSemaphore.Wait();
-        try
+        CheckIfDisposed();
+
+        int n = 0;
+        var span = CollectionsMarshal.AsSpan(items);
+        ref var pointer = ref MemoryMarshal.GetReference(span);
+        for (int i = 0; i < span.Length; i++)
+        {
+            ref var item = ref Unsafe.Add(ref pointer, i);
+            if (item.IsDefined(identifier))
+            {
+                item.Renew(value);
+                n++;
+            }
+        }
+
+        return n;
+    }
+
+    public int SafeCount()
+    {
+        lock (items)
         {
             int count = items.Count;
+            int rem = UnsafeCollectExpired();
 
-            List<CacheItem<TKey, TValue>> toRemove = new();
-            foreach (var item in items)
-            {
-                if (DateTime.Now > item.ExpiresAt)
-                {
-                    toRemove.Add(item);
-                }
-            }
-
-            UnsafeCollect(toRemove);
-
-            return count - toRemove.Count;
-        }
-        finally
-        {
-            asyncSemaphore.Release();
+            return count - rem;
         }
     }
 
-    public void Add(TKey[] ids, TValue value, DateTime expiresAt)
+    public void SafeAdd(TKey[] ids, TValue value, DateTime expiresAt)
     {
-        ArgumentNullException.ThrowIfNull(nameof(value));
+        CheckIfDisposed();
+        ArgumentNullException.ThrowIfNull(value);
 
-        var cItem = new CacheItem<TKey, TValue>(ids, value, expiresAt);
+        var cItem = new CacheItem<TKey, TValue>(ids, value, expiresAt, kcomparer);
+        lock (items) UnsafeAdd(cItem);
+    }
 
-        asyncSemaphore.Wait();
-        try
+    public int SafeCollect()
+    {
+        lock (items)
         {
-            UnsafeAdd(cItem);
-        }
-        finally
-        {
-            asyncSemaphore.Release();
+            if (items.Count == 0) return 0;
+            return UnsafeCollectExpired();
         }
     }
 
-    private void UnsafeCollect(IEnumerable<CacheItem<TKey, TValue>> toRemove)
+    public void SafeClear()
     {
-        foreach (var item in toRemove)
-        {
-            items.Remove(item);
-        }
-    }
-
-    private void CollectInternal(object? state)
-    {
-        _ = Collect();
-    }
-
-    public int Collect()
-    {
-        asyncSemaphore.Wait();
-        try
-        {
-            List<CacheItem<TKey, TValue>> toRemove = new();
-            foreach (var item in items)
-            {
-                if (DateTime.Now > item.ExpiresAt)
-                {
-                    toRemove.Add(item);
-                }
-            }
-
-            UnsafeCollect(toRemove);
-
-            return toRemove.Count;
-        }
-        finally
-        {
-            asyncSemaphore.Release();
-        }
-    }
-
-    public void Clear()
-    {
-        asyncSemaphore.Wait();
-        try
+        lock (items)
         {
             items.Clear();
         }
-        finally
-        {
-            asyncSemaphore.Release();
-        }
     }
 
-    public void Invoke(Action action)
+    public void SafeInvoke(Action action)
     {
-        asyncSemaphore.Wait();
-        try
+        lock (items)
         {
             action();
         }
-        finally
+    }
+
+    public CacheItem<TKey, TValue> SafeFirstMatch(TKey identifier)
+    {
+        lock (items)
         {
-            asyncSemaphore.Release();
+            return UnsafeGetItem(identifier);
         }
     }
 
-    public int UnsafeRenewSingle(TKey identifier, DateTime value)
+    public IEnumerable<CacheItem<TKey, TValue>> SafeAllMatch(TKey identifier)
     {
-        int c = 0;
-        foreach (var item in items)
+        lock (items)
         {
-            if (item.Keys.Contains(identifier))
-            {
-                item.Renew(value);
-                c++;
-            }
-        }
-        return c;
-    }
-
-    public CacheItem<TKey, TValue> FirstMatch(TKey identifier)
-    {
-        ArgumentNullException.ThrowIfNull(identifier);
-        asyncSemaphore.Wait();
-        var removeBag = GetBag();
-        try
-        {
-            var item = UnsafeGetItem(identifier);
-            if (DateTime.Now > item.ExpiresAt)
-            {
-                removeBag.Add(item);
-                return CacheItem<TKey, TValue>.Default;
-            }
-            else return item;
-        }
-        finally
-        {
-            UnsafeCollect(removeBag);
-            asyncSemaphore.Release();
+            return UnsafeGetItems(identifier);
         }
     }
 
-    public IEnumerable<CacheItem<TKey, TValue>> AllMatch(TKey identifier)
+    public IEnumerable<CacheItem<TKey, TValue>> SafeMatch(Func<TKey[], bool> predicate)
     {
-        ArgumentNullException.ThrowIfNull(identifier);
-        asyncSemaphore.Wait();
-        var removeBag = GetBag();
-        try
+        lock (items)
         {
-            var values = UnsafeGetItems(identifier);
-            foreach (var item in values)
+            var bag = GetBag();
+            var itemsSpan = CollectionsMarshal.AsSpan(items);
+            for (int i = 0; i < itemsSpan.Length; i++)
             {
-                if (DateTime.Now > item.ExpiresAt)
+                if (predicate(itemsSpan[i].Keys))
                 {
-                    removeBag.Add(item);
-                }
-                yield return CacheItem<TKey, TValue>.Default;
-            }
-        }
-        finally
-        {
-            UnsafeCollect(removeBag);
-            asyncSemaphore.Release();
-        }
-    }
-
-    public IEnumerable<CacheItem<TKey, TValue>> Match(Func<TKey[], bool> predicate)
-    {
-        asyncSemaphore.Wait();
-        var removeBag = GetBag();
-        try
-        {
-            foreach (var item in items)
-            {
-                if (predicate(item.Keys))
-                {
-                    if (DateTime.Now > item.ExpiresAt)
-                    {
-                        removeBag.Add(item);
-                    }
-                    else yield return item;
+                    bag.Add(itemsSpan[i]);
                 }
             }
-        }
-        finally
-        {
-            UnsafeCollect(removeBag);
-            asyncSemaphore.Release();
+
+            return bag;
         }
     }
 
-    public int Remove(TKey identifier)
+    public int SafeRemove(TKey identifier)
     {
-        ArgumentNullException.ThrowIfNull(identifier);
-        asyncSemaphore.Wait();
-        var removeBag = GetBag();
-        try
+        lock (items)
         {
-            var item = UnsafeGetItem(identifier);
-            if (item.Keys.Length == 0)
+            var bag = GetBag();
+            var itemsSpan = CollectionsMarshal.AsSpan(items);
+            for (int i = 0; i < itemsSpan.Length; i++)
             {
-                return 0;
-            }
-            else
-            {
-                removeBag.Add(item);
-                return 1;
-            }
-        }
-        finally
-        {
-            UnsafeCollect(removeBag);
-            asyncSemaphore.Release();
-        }
-    }
-
-    public int Remove(Func<TKey[], bool> predicate)
-    {
-        int r = 0;
-        asyncSemaphore.Wait();
-        var removeBag = GetBag();
-        try
-        {
-            foreach (var item in items)
-            {
-                if (predicate(item.Keys))
+                if (itemsSpan[i].IsDefined(identifier))
                 {
-                    removeBag.Add(item);
-                    r++;
+                    bag.Add(itemsSpan[i]);
                 }
             }
+
+            UnsafeCollect(bag);
+
+            return bag.Count;
         }
-        finally
+    }
+
+    public int SafeRemove(Func<TKey[], bool> predicate)
+    {
+        lock (items)
         {
-            UnsafeCollect(removeBag);
-            asyncSemaphore.Release();
+            var bag = GetBag();
+            var itemsSpan = CollectionsMarshal.AsSpan(items);
+            for (int i = 0; i < itemsSpan.Length; i++)
+            {
+                if (predicate(itemsSpan[i].Keys))
+                {
+                    bag.Add(itemsSpan[i]);
+                }
+            }
+
+            UnsafeCollect(bag);
+
+            return bag.Count;
         }
-        return r;
+    }
+
+    private void TimerCollectCallback(object? state)
+    {
+        if (_disposed) return;
+        SafeCollect();
     }
 
     public void Dispose()
     {
+        _disposed = true;
         timer.Dispose();
-        asyncSemaphore.Wait();
-        try
-        {
-            items.Clear();
-        }
-        finally
-        {
-            asyncSemaphore.Dispose();
-        }
+        lock (items) items.Clear();
     }
 }
