@@ -1,27 +1,29 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace CacheStorage;
+﻿namespace CacheStorage;
 
 /// <summary>
 /// Provides a pooling context and thread to periodically remove all expired items from cache storages.
 /// </summary>
 public sealed class CachePoolingContext
 {
-    internal Thread collectionThread;
+    internal System.Timers.Timer collectionTimer;
 
     /// <summary>
     /// Gets or sets the pooling interval.
     /// </summary>
-    public TimeSpan CollectInterval { get; set; }
+    public TimeSpan CollectInterval
+    {
+        get => TimeSpan.FromMilliseconds(this.collectionTimer.Interval);
+        set => this.collectionTimer.Interval = value.TotalMilliseconds;
+    }
 
     /// <summary>
     /// Gets an boolean indicating if the current pool is running.
     /// </summary>
-    public bool IsCollecting { get; private set; } = false;
+    public bool IsCollecting
+    {
+        get => this.collectionTimer.Enabled;
+        set => this.collectionTimer.Enabled = value;
+    }
 
     /// <summary>
     /// Gets or sets an list of <see cref="ITimeToLiveCache"/> items which will be collected
@@ -35,10 +37,14 @@ public sealed class CachePoolingContext
     /// <param name="interval">The pooling interval.</param>
     public CachePoolingContext(TimeSpan interval)
     {
-        CollectInterval = interval;
+        this.collectionTimer = new System.Timers.Timer(interval.TotalMilliseconds);
+        this.collectionTimer.Elapsed += this.CollectionTimer_Elapsed;
+        this.CollectInterval = interval;
+    }
 
-        collectionThread = new Thread(new ThreadStart(CollectionThreadJob));
-        collectionThread.IsBackground = true;
+    private void CollectionTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
+    {
+        this.CollectAll();
     }
 
     /// <summary>
@@ -58,11 +64,7 @@ public sealed class CachePoolingContext
     /// </summary>
     public void StartCollecting()
     {
-        if (collectionThread.ThreadState != ThreadState.Running)
-        {
-            IsCollecting = true;
-            collectionThread.Start();
-        }
+        this.collectionTimer.Start();
     }
 
     /// <summary>
@@ -70,7 +72,7 @@ public sealed class CachePoolingContext
     /// </summary>
     public void StopCollecting()
     {
-        IsCollecting = false;
+        this.collectionTimer.Stop();
     }
 
     /// <summary>
@@ -81,30 +83,15 @@ public sealed class CachePoolingContext
     /// </returns>
     public int CollectAll()
     {
-        lock (CollectingCaches)
+        lock (this.CollectingCaches)
         {
             int count = 0;
-            for (int i = 0; i < CollectingCaches.Count; i++)
+            for (int i = 0; i < this.CollectingCaches.Count; i++)
             {
-                var cache = CollectingCaches[i];
+                var cache = this.CollectingCaches[i];
                 count += cache.RemoveExpiredEntities();
             }
             return count;
-        }
-    }
-
-    void CollectionThreadJob()
-    {
-        while (IsCollecting)
-        {
-            try
-            {
-                CollectAll();
-            }
-            finally
-            {
-                Thread.Sleep(CollectInterval);
-            }
         }
     }
 }
