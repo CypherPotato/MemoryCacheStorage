@@ -37,11 +37,7 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
         {
             ArgumentNullException.ThrowIfNull(value);
             this.Clear();
-            this._item = new CacheItem<TValue>()
-            {
-                ExpiresAt = DateTime.Now.Add(this.Expiration),
-                Value = value
-            };
+            this._item = new CacheItem<TValue>(value, DateTime.Now.Add(this.Expiration));
         }
     }
 
@@ -99,12 +95,30 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     }
 
     /// <summary>
+    /// Renews the expiration time of this <typeparamref name="TValue"/>.
+    /// </summary>
+    public void Renew()
+    {
+        this._item.ExpiresAt = DateTime.Now.Add(this.Expiration);
+    }
+
+    /// <summary>
+    /// Renews the expiration time of this <typeparamref name="TValue"/> with the
+    /// specified expiration time.
+    /// </summary>
+    /// <param name="expiration">The amount of time to give to the object before it expires.</param>
+    public void Renew(TimeSpan expiration)
+    {
+        this._item.ExpiresAt = DateTime.Now.Add(expiration);
+    }
+
+    /// <summary>
     /// Removes the linked object from this cache object.
     /// </summary>
     public void Clear()
     {
         (this._item.Value as IDisposable)?.Dispose();
-        this._item = default;
+        this._item = CacheItem<TValue>.Empty;
     }
 
     /// <summary>
@@ -132,7 +146,7 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     /// </summary>
     public CachedObject()
     {
-        this._item = default;
+        this._item = CacheItem<TValue>.Empty;
         this.Expiration = TimeSpan.FromMinutes(10);
     }
 
@@ -143,7 +157,7 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     public CachedObject(TValue value)
     {
         this.Expiration = TimeSpan.FromMinutes(10);
-        this._item = new CacheItem<TValue>() { Value = value, ExpiresAt = DateTime.Now + this.Expiration };
+        this._item = new CacheItem<TValue>(value, DateTime.Now.Add(this.Expiration));
     }
 
     /// <summary>
@@ -153,7 +167,7 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     public CachedObject(TValue value, TimeSpan expiresIn)
     {
         this.Expiration = expiresIn;
-        this._item = new CacheItem<TValue>() { Value = value, ExpiresAt = DateTime.Now + this.Expiration };
+        this._item = new CacheItem<TValue>(value, DateTime.Now.Add(this.Expiration));
     }
 
     /// <inheritdoc/>

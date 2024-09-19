@@ -1,19 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace CacheStorage;
+﻿namespace CacheStorage;
 
 /// <summary>
-/// Provides an interface for time-to-live based cache storages.
+/// Provides an interface for collecting expired time-to-live based values.
 /// </summary>
 public interface ITimeToLiveCache
 {
     /// <summary>
     /// Removes all expired entities from this storage.
     /// </summary>
-    /// <returns></returns>
+    /// <returns>The number of removed entities.</returns>
     public int RemoveExpiredEntities();
 }

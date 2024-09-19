@@ -52,9 +52,14 @@ public sealed class CachePoolingContext
     /// and immediately starts it.
     /// </summary>
     /// <param name="collectInterval">The pooling interval time.</param>
-    public static CachePoolingContext StartNew(TimeSpan collectInterval)
+    /// <param name="collectingCaches">An optional array of <see cref="ITimeToLiveCache"/> to start collecting.</param>
+    public static CachePoolingContext StartNew(TimeSpan collectInterval, params ITimeToLiveCache[] collectingCaches)
     {
         var c = new CachePoolingContext(collectInterval);
+
+        for (int i = 0; i < collectingCaches.Length; i++)
+            c.CollectingCaches.Add(collectingCaches[i]);
+
         c.StartCollecting();
         return c;
     }

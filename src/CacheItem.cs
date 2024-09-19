@@ -1,17 +1,20 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Runtime.CompilerServices;
 
 namespace CacheStorage;
 
-internal struct CacheItem<TValue>
+internal class CacheItem<TValue>
 {
+    public static CacheItem<TValue> Empty = new CacheItem<TValue>(default!, DateTime.MinValue);
+
     public DateTime ExpiresAt { get; set; }
     public TValue Value { get; set; }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool IsExpired() => DateTime.Now > ExpiresAt;
+    public bool IsExpired() => DateTime.Now > this.ExpiresAt;
+
+    public CacheItem(TValue value, DateTime expiresAt)
+    {
+        this.Value = value;
+        this.ExpiresAt = expiresAt;
+    }
 }

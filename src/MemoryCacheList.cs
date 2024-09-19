@@ -6,7 +6,7 @@ namespace CacheStorage;
 /// Represents an TTL list implementation, where it's items expires after some time.
 /// </summary>
 /// <typeparam name="TValue">The object type of the list.</typeparam>
-public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
+public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedCallbackHandler<TValue>
 {
     internal List<CacheItem<TValue>> items;
 
@@ -27,11 +27,10 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
     {
         lock (this.items)
         {
-            this.items.Add(new CacheItem<TValue>()
-            {
-                ExpiresAt = DateTime.Now.Add(expiration),
-                Value = item
-            });
+            if (this.AddItemCallback is not null)
+                this.AddItemCallback(this, item);
+
+            this.items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(expiration)));
         }
         return true;
     }
@@ -53,10 +52,13 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
     {
         lock (this.items)
         {
-            if (this.items.Count > index)
-                (this.items[index].Value as IDisposable)?.Dispose();
+            if (this.items.Count > index && this.RemoveItemCallback is not null)
+                this.RemoveItemCallback(this, this.items[index].Value);
 
-            this.items[index] = new CacheItem<TValue>() { Value = item, ExpiresAt = DateTime.Now.Add(this.DefaultExpiration) };
+            if (this.AddItemCallback is not null)
+                this.AddItemCallback(this, item);
+
+            this.items[index] = new CacheItem<TValue>(item, DateTime.Now.Add(this.DefaultExpiration));
         }
     }
 
@@ -83,6 +85,12 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
     /// <inheritdoc/>
     public bool IsReadOnly => false;
 
+    /// <inheritdoc/>
+    public CachedItemHandler<TValue>? AddItemCallback { get; set; }
+
+    /// <inheritdoc/>
+    public CachedItemHandler<TValue>? RemoveItemCallback { get; set; }
+
     /// <summary>
     /// Caches an object and adds it to the end of this collection.
     /// </summary>
@@ -102,11 +110,55 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
         this.SetCachedItem(item, expiresAt);
     }
 
+    /// <summary>
+    /// Searches and renews an existing and cached <typeparamref name="TValue"/>. If the value is already expired, an new
+    /// entry is added in the cache store.
+    /// </summary>
+    /// <param name="item">The item to add or renew.</param>
+    /// <param name="expiresAt">The expiration time.</param>
+    public void AddOrRenew(TValue item, TimeSpan expiresAt)
+    {
+        lock (this.items)
+        {
+            for (int i1 = 0; i1 < this.items.Count; i1++)
+            {
+                CacheItem<TValue> i = this.items[i1];
+                if (i.Value?.Equals(item) == true)
+                {
+                    i.ExpiresAt = DateTime.Now + expiresAt;
+                    return;
+                }
+            }
+
+            // if the item was not found, add it
+            if (this.AddItemCallback is not null)
+                this.AddItemCallback(this, item);
+
+            this.items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(expiresAt)));
+        }
+    }
+
+    /// <summary>
+    /// Searches and renews an existing and cached <typeparamref name="TValue"/> using the default expiration time. If
+    /// the value is already expired, an newentry is added in the cache store.
+    /// </summary>
+    /// <param name="item">The item to add or renew.</param>
+    public void AddOrRenew(TValue item) => this.AddOrRenew(item, this.DefaultExpiration);
+
     /// <inheritdoc/>
     public void Clear()
     {
         lock (this.items)
         {
+            if (this.RemoveItemCallback is not null)
+            {
+                for (int i1 = 0; i1 < this.items.Count; i1++)
+                {
+                    CacheItem<TValue>? i = this.items[i1];
+                    this.RemoveItemCallback(this, i.Value);
+                }
+            }
+
             this.items.Clear();
         }
     }
@@ -169,11 +221,11 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
     {
         lock (this.items)
         {
-            CacheItem<TValue> c = new CacheItem<TValue>()
-            {
-                Value = item,
-                ExpiresAt = DateTime.Now.Add(this.DefaultExpiration)
-            };
+            CacheItem<TValue> c = new CacheItem<TValue>(item, DateTime.Now.Add(this.DefaultExpiration));
+
+            if (this.AddItemCallback is not null)
+                this.AddItemCallback(this, item);
+
             this.items.Insert(index, c);
         }
     }
@@ -183,11 +235,11 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
     {
         lock (this.items)
         {
-            CacheItem<TValue> c = new CacheItem<TValue>()
-            {
-                Value = item,
-                ExpiresAt = DateTime.Now.Add(expiresAt)
-            };
+            CacheItem<TValue> c = new CacheItem<TValue>(item, DateTime.Now.Add(expiresAt));
+
+            if (this.AddItemCallback is not null)
+                this.AddItemCallback(this, item);
+
             this.items.Insert(index, c);
         }
     }
@@ -202,7 +254,9 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
                 var value = this.items[i].Value;
                 if (value?.Equals(item) == true)
                 {
-                    if (value is IDisposable ds) ds.Dispose();
+                    if (this.RemoveItemCallback is not null)
+                        this.RemoveItemCallback(this, value);
+
                     this.items.RemoveAt(i);
                     break;
                 }
@@ -217,7 +271,10 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
         lock (this.items)
         {
             var value = this.items[index].Value;
-            if (value is IDisposable ds) ds.Dispose();
+
+            if (this.RemoveItemCallback is not null)
+                this.RemoveItemCallback(this, value);
+
             this.items.RemoveAt(index);
         }
     }
@@ -245,7 +302,10 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache
             foreach (int key in toRemove)
             {
                 var value = this.items[key].Value;
-                if (value is IDisposable ds) ds.Dispose();
+
+                if (this.RemoveItemCallback is not null)
+                    this.RemoveItemCallback(this, value);
+
                 this.items.RemoveAt(key);
             }
 
