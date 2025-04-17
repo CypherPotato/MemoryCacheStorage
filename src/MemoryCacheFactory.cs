@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace CacheStorage;
+﻿namespace CacheStorage;
 
 /// <summary>
 /// Represents a factory that hosts multiple memory caches instances.
@@ -14,8 +8,7 @@ namespace CacheStorage;
 /// <typeparam name="TValue">The <see cref="MemoryCacheStorage{TKey, TValue}"/> value type.</typeparam>
 public class MemoryCacheFactory<TStorageKey, TKey, TValue> : ICacheFactory<TStorageKey, MemoryCacheStorage<TKey, TValue>, TKey, TValue>
     where TStorageKey : notnull
-    where TKey : notnull
-{
+    where TKey : notnull {
     Dictionary<TStorageKey, ICacheStorage<TKey, TValue>> storages;
 
     /// <summary>
@@ -34,14 +27,13 @@ public class MemoryCacheFactory<TStorageKey, TKey, TValue> : ICacheFactory<TStor
     /// <summary>
     /// Gets or sets the default expiration time for newly created cache storages.
     /// </summary>
-    public TimeSpan DefaultExpiration { get; set; } = TimeSpan.FromMinutes(10);
+    public TimeSpan DefaultExpiration { get; set; } = TimeSpan.FromMinutes ( 10 );
 
     /// <summary>
     /// Creates an new instance of the <see cref="MemoryCacheFactory{TStorageKey, TKey, TValue}"/> class.
     /// </summary>
-    public MemoryCacheFactory()
-    {
-        storages = new();
+    public MemoryCacheFactory () {
+        storages = new ();
     }
 
     /// <summary>
@@ -49,9 +41,8 @@ public class MemoryCacheFactory<TStorageKey, TKey, TValue> : ICacheFactory<TStor
     /// </summary>
     /// <param name="factoryComparer">Defines the comparer of the storage instances.</param>
     /// <param name="storageComparer">Defines the comparer of the storage keys.</param>
-    public MemoryCacheFactory(IEqualityComparer<TStorageKey> factoryComparer, IEqualityComparer<TKey> storageComparer)
-    {
-        storages = new(factoryComparer);
+    public MemoryCacheFactory ( IEqualityComparer<TStorageKey> factoryComparer, IEqualityComparer<TKey> storageComparer ) {
+        storages = new ( factoryComparer );
         StorageComparer = storageComparer;
     }
 
@@ -60,33 +51,27 @@ public class MemoryCacheFactory<TStorageKey, TKey, TValue> : ICacheFactory<TStor
     /// an new one if it doens't exists.
     /// </summary>
     /// <param name="key">The storage key.</param>
-    public MemoryCacheStorage<TKey, TValue> GetMemoryStorage(TStorageKey key)
-        => (MemoryCacheStorage<TKey, TValue>)GetStorage(key);
+    public MemoryCacheStorage<TKey, TValue> GetMemoryStorage ( TStorageKey key )
+        => (MemoryCacheStorage<TKey, TValue>) GetStorage ( key );
 
     /// <inheritdoc/> 
-    public ICacheStorage<TKey, TValue> GetStorage(TStorageKey key)
-    {
-        lock (storages)
-        {
-            if (storages.TryGetValue(key, out var cacheStorage))
-            {
+    public ICacheStorage<TKey, TValue> GetStorage ( TStorageKey key ) {
+        lock (storages) {
+            if (storages.TryGetValue ( key, out var cacheStorage )) {
                 return cacheStorage;
             }
-            else
-            {
+            else {
                 MemoryCacheStorage<TKey, TValue> memCache;
-                if (StorageComparer is null)
-                {
-                    memCache = new MemoryCacheStorage<TKey, TValue>();
+                if (StorageComparer is null) {
+                    memCache = new MemoryCacheStorage<TKey, TValue> ();
                 }
-                else
-                {
-                    memCache = new MemoryCacheStorage<TKey, TValue>(StorageComparer);
+                else {
+                    memCache = new MemoryCacheStorage<TKey, TValue> ( StorageComparer );
                 }
 
                 memCache.DefaultExpiration = DefaultExpiration;
-                storages.Add(key, memCache);
-                PoolingContext?.CollectingCaches.Add(memCache);
+                storages.Add ( key, memCache );
+                PoolingContext?.CollectingCaches.Add ( memCache );
 
                 return memCache;
             }
@@ -94,8 +79,7 @@ public class MemoryCacheFactory<TStorageKey, TKey, TValue> : ICacheFactory<TStor
     }
 
     /// <inheritdoc/>
-    public void Clear()
-    {
-        storages.Clear();
+    public void Clear () {
+        storages.Clear ();
     }
 }
