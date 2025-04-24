@@ -2,7 +2,7 @@
 
 	<!-- App properties -->
 	<PropertyGroup>
-		<TargetFramework>net6.0</TargetFramework>
+		<TargetFramework>net8.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 
@@ -31,9 +31,9 @@
 
 	<!-- Versions -->
 	<PropertyGroup>
-		<Version>2.5.0</Version>
-		<AssemblyVersion>2.5.0</AssemblyVersion>
-		<FileVersion>2.5.0</FileVersion>
+		<Version>2.6.0</Version>
+		<AssemblyVersion>2.6.0</AssemblyVersion>
+		<FileVersion>2.6.0</FileVersion>
 	</PropertyGroup>
 
 	<!-- Package files -->
