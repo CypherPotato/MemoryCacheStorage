@@ -49,9 +49,11 @@ public class MemoryCacheStorage<TKey, TValue> :
 
     internal bool UnsafeRemoveKey(TKey key)
     {
-        var value = items[key];
-
-        RemoveItemCallback?.Invoke(this, value.Value);
+        if (RemoveItemCallback != null && items.ContainsKey(key))
+        {
+            var value = items[key];
+            RemoveItemCallback.Invoke(this, value.Value);
+        }
 
         return items.Remove(key);
     }
@@ -260,15 +262,18 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <returns>Returns the cached object or the value of the expression if the object is not already cached.</returns>
     public TValue GetOrAdd(TKey key, TimeSpan expiration, Func<TValue> getHandler)
     {
-        if (TryGetCachedItem(key, out var cachedItem))
+        lock (items)
         {
-            return cachedItem;
-        }
-        else
-        {
-            cachedItem = getHandler();
-            SetCachedItem(key, cachedItem, expiration, ReplaceItemAction.Dispose);
-            return cachedItem;
+            if (TryGetCachedItem(key, out var cachedItem))
+            {
+                return cachedItem;
+            }
+            else
+            {
+                cachedItem = getHandler();
+                SetCachedItem(key, cachedItem, expiration, ReplaceItemAction.Dispose);
+                return cachedItem;
+            }
         }
     }
 
@@ -290,17 +295,22 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <param name="expiration">The object expiration time.</param>
     /// <param name="getHandler">The async expression which results the <typeparamref name="TValue"/> to get.</param>
     /// <returns>Returns the cached object or the value of the expression if the object is not already cached.</returns>
-    public async Task<TValue> GetOrAddAsync(TKey key, TimeSpan expiration, Func<Task<TValue>> getHandler)
+    public Task<TValue> GetOrAddAsync(TKey key, TimeSpan expiration, Func<Task<TValue>> getHandler)
     {
-        if (TryGetCachedItem(key, out var cachedItem))
+        lock (items)
         {
-            return cachedItem;
-        }
-        else
-        {
-            cachedItem = await getHandler();
-            SetCachedItem(key, cachedItem, expiration, ReplaceItemAction.Dispose);
-            return cachedItem;
+            if (TryGetCachedItem(key, out var cachedItem))
+            {
+                return Task.FromResult(cachedItem);
+            }
+            else
+            {
+                return getHandler().ContinueWith(task =>
+                {
+                    SetCachedItem(key, task.Result, expiration, ReplaceItemAction.Dispose);
+                    return task.Result;
+                });
+            }
         }
     }
 

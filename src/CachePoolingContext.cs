@@ -1,4 +1,6 @@
-﻿namespace CacheStorage;
+﻿using System.Collections;
+
+namespace CacheStorage;
 
 /// <summary>
 /// Provides a pooling context and thread to periodically remove all expired items from cache storages.
@@ -42,7 +44,7 @@ public sealed class CachePoolingContext
     /// Gets or sets an list of <see cref="ITimeToLiveCache"/> items which will be collected
     /// from the current pool.
     /// </summary>
-    public IList<ITimeToLiveCache> CollectingCaches { get; set; } = new List<ITimeToLiveCache>();
+    public IList<ITimeToLiveCache> CollectingCaches { get; set; } = [];
 
     /// <summary>
     /// Creates an new instance of the <see cref="CachePoolingContext"/> class.
@@ -101,7 +103,7 @@ public sealed class CachePoolingContext
     /// </returns>
     public int CollectAll()
     {
-        lock (CollectingCaches)
+        lock (((ICollection)CollectingCaches).SyncRoot)
         {
             int count = 0;
             for (int i = 0; i < CollectingCaches.Count; i++)

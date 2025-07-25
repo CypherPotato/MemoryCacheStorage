@@ -29,7 +29,7 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// </summary>
     public MemoryCacheList()
     {
-        items = new List<CacheItem<TValue>>();
+        items = [];
     }
 
     /// <summary>
@@ -122,10 +122,10 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// Caches an object and adds it to the end of this collection with the specified expiration time.
     /// </summary>
     /// <param name="item">The item to add.</param>
-    /// <param name="expiresAt">The expiration time.</param>
-    public void Add(TValue item, TimeSpan expiresAt)
+    /// <param name="duration">The expiration time.</param>
+    public void Add(TValue item, TimeSpan duration)
     {
-        SetCachedItem(item, expiresAt);
+        SetCachedItem(item, duration);
     }
 
     /// <summary>
@@ -133,8 +133,8 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// entry is added in the cache store.
     /// </summary>
     /// <param name="item">The item to add or renew.</param>
-    /// <param name="expiresAt">The expiration time.</param>
-    public void AddOrRenew(TValue item, TimeSpan expiresAt)
+    /// <param name="duration">The expiration time.</param>
+    public void AddOrRenew(TValue item, TimeSpan duration)
     {
         lock (((ICollection)items).SyncRoot)
         {
@@ -143,7 +143,7 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
                 CacheItem<TValue> i = items[i1];
                 if (i.Value?.Equals(item) == true)
                 {
-                    i.ExpiresAt = DateTime.Now + expiresAt;
+                    i.ExpiresAt = DateTime.Now + duration;
                     return;
                 }
             }
@@ -151,7 +151,7 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
             // if the item was not found, add it
             AddItemCallback?.Invoke(this, item);
 
-            items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(expiresAt)));
+            items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(duration)));
         }
     }
 
