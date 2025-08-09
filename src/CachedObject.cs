@@ -6,7 +6,7 @@ namespace CacheStorage;
 /// Represents an structure which caches an specific object.
 /// </summary>
 /// <typeparam name="TValue">The type of the object to cache.</typeparam>
-public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEquatable<CachedObject<TValue>>
+public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEquatable<CachedObject<TValue>>
 {
     private CacheItem<TValue> _item;
 
@@ -23,21 +23,33 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     {
         get
         {
-            if (_item.IsExpired())
+            lock (this)
             {
-                Clear();
-                return default;
-            }
-            else
-            {
-                return _item.Value;
+                if (_item.IsExpired())
+                {
+                    Clear();
+                    return default;
+                }
+                else
+                {
+                    return _item.Value;
+                }
             }
         }
         set
         {
-            ArgumentNullException.ThrowIfNull(value);
-            Clear();
-            _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
+            lock (this)
+            {
+                Clear();
+                if (value is null)
+                {
+                    _item = CacheItem<TValue>.Empty;
+                }
+                else
+                {
+                    _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
+                }
+            }
         }
     }
 
@@ -49,13 +61,16 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     {
         get
         {
-            if (_item.IsExpired())
+            lock (this)
             {
-                Clear();
-                return false;
+                if (_item.IsExpired())
+                {
+                    Clear();
+                    return false;
+                }
+                else
+                    return true;
             }
-            else
-                return true;
         }
     }
 
@@ -65,15 +80,18 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     /// <param name="obtainFunc">The function that returns <typeparamref name="TValue"/>.</param>
     public TValue GetOrSet(Func<TValue> obtainFunc)
     {
-        if (HasValue)
+        lock (this)
         {
-            return _item.Value;
-        }
-        else
-        {
-            TValue tval = obtainFunc();
-            Value = tval;
-            return tval;
+            if (HasValue)
+            {
+                return _item.Value;
+            }
+            else
+            {
+                TValue tval = obtainFunc();
+                Value = tval;
+                return tval;
+            }
         }
     }
 
@@ -83,15 +101,26 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     /// <param name="obtainFunc">The async function that returns <typeparamref name="TValue"/>.</param>
     public async Task<TValue> GetOrSetAsync(Func<Task<TValue>> obtainFunc)
     {
-        if (HasValue)
+        Task<TValue>? obtainTask = null;
+        lock (this)
         {
-            return _item.Value;
+            if (HasValue)
+            {
+                return _item.Value;
+            }
+            obtainTask = obtainFunc();
         }
-        else
+
+        TValue value = await obtainTask.ConfigureAwait(false);
+
+        lock (this)
         {
-            TValue tval = await obtainFunc();
-            Value = tval;
-            return tval;
+            if (HasValue)
+            {
+                return _item.Value;
+            }
+            Value = value;
+            return value;
         }
     }
 
@@ -100,7 +129,10 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     /// </summary>
     public void Renew()
     {
-        _item.ExpiresAt = DateTime.Now.Add(Expiration);
+        lock (this)
+        {
+            _item.ExpiresAt = DateTime.Now.Add(Expiration);
+        }
     }
 
     /// <summary>
@@ -110,7 +142,10 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     /// <param name="expiration">The amount of time to give to the object before it expires.</param>
     public void Renew(TimeSpan expiration)
     {
-        _item.ExpiresAt = DateTime.Now.Add(expiration);
+        lock (this)
+        {
+            _item.ExpiresAt = DateTime.Now.Add(expiration);
+        }
     }
 
     /// <summary>
@@ -118,8 +153,11 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     /// </summary>
     public void Clear()
     {
-        (_item.Value as IDisposable)?.Dispose();
-        _item = CacheItem<TValue>.Empty;
+        lock (this)
+        {
+            (_item.Value as IDisposable)?.Dispose();
+            _item = CacheItem<TValue>.Empty;
+        }
     }
 
     /// <summary>
@@ -137,9 +175,13 @@ public struct CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>, IEqua
     }
 
     /// <inheritdoc/>
-    public bool Equals(CachedObject<TValue> other)
+    public bool Equals(CachedObject<TValue>? other)
     {
-        return Value?.Equals(other.Value) == true;
+        if (other is CachedObject<TValue>)
+        {
+            return Value?.Equals(other.Value) == true;
+        }
+        return false;
     }
 
     /// <summary>

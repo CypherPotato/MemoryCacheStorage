@@ -1,4 +1,5 @@
-﻿using System.Collections;
+using System.Collections;
+using System.Collections.Concurrent;
 
 namespace CacheStorage;
 
@@ -20,21 +21,14 @@ public class MemoryCacheStorage<TKey, TValue> :
     where TKey : notnull
 {
 
-    internal IDictionary<TKey, CacheItem<TValue>> items;
-    private static MemoryCacheStorage<TKey, TValue>? shared;
+    internal ConcurrentDictionary<TKey, CacheItem<TValue>> items;
+    private static Lazy<MemoryCacheStorage<TKey, TValue>> shared = new Lazy<MemoryCacheStorage<TKey, TValue>>(() => CachePoolingContext.Shared.Collect(new MemoryCacheStorage<TKey, TValue>()));
 
     /// <summary>
     /// Gets the shared instance of <see cref="MemoryCacheStorage{TKey, TValue}"/>, which is linked to the shared
     /// <see cref="CachePoolingContext"/>.
     /// </summary>
-    public static MemoryCacheStorage<TKey, TValue> Shared
-    {
-        get
-        {
-            shared ??= CachePoolingContext.Shared.Collect(new MemoryCacheStorage<TKey, TValue>());
-            return shared;
-        }
-    }
+    public static MemoryCacheStorage<TKey, TValue> Shared => shared.Value;
 
     /// <summary>
     /// Gets or sets the default expiration time for newly added items.
@@ -47,67 +41,52 @@ public class MemoryCacheStorage<TKey, TValue> :
         Renew
     }
 
-    internal bool UnsafeRemoveKey(TKey key)
-    {
-        if (RemoveItemCallback != null && items.ContainsKey(key))
-        {
-            var value = items[key];
-            RemoveItemCallback.Invoke(this, value.Value);
-        }
-
-        return items.Remove(key);
-    }
-
-    internal bool SafeRemoveKey(TKey key)
-    {
-        lock (items)
-        {
-            return UnsafeRemoveKey(key);
-        }
-    }
-
     internal bool SetCachedItem(TKey key, TValue item, TimeSpan expiration, ReplaceItemAction replaceAction)
     {
-        lock (items)
-        {
-            if (items.TryGetValue(key, out var removingEntity))
-            {
-                if (replaceAction == ReplaceItemAction.Dispose)
-                {
-                    RemoveItemCallback?.Invoke(this, removingEntity.Value);
-                }
-                else if (replaceAction == ReplaceItemAction.Renew)
-                {
-                    removingEntity.ExpiresAt = DateTime.Now.Add(expiration);
-                    return true;
-                }
-            }
+        var newCacheItem = new CacheItem<TValue>(item, DateTime.Now.Add(expiration));
 
-            AddItemCallback?.Invoke(this, item);
-            items[key] = new CacheItem<TValue>(item, DateTime.Now.Add(expiration));
+        if (replaceAction == ReplaceItemAction.Renew)
+        {
+            items.AddOrUpdate(key, newCacheItem, (k, old) =>
+            {
+                old.ExpiresAt = newCacheItem.ExpiresAt;
+                return old;
+            });
+            return true;
         }
-        return true;
+        else // ReplaceItemAction.Dispose
+        {
+            TValue? oldItemValue = default;
+            items.AddOrUpdate(key, newCacheItem, (k, old) =>
+            {
+                oldItemValue = old.Value;
+                return newCacheItem;
+            });
+            if (oldItemValue is not null)
+            {
+                RemoveItemCallback?.Invoke(this, oldItemValue);
+            }
+            AddItemCallback?.Invoke(this, item);
+            return true;
+        }
     }
 
     internal bool TryGetCachedItem(TKey key, out TValue value)
     {
-        lock (items)
+        if (items.TryGetValue(key, out var cachedItem))
         {
-            if (items.TryGetValue(key, out var cachedItem))
+            if (!cachedItem.IsExpired())
             {
-                if (!cachedItem.IsExpired())
-                {
-                    value = cachedItem.Value;
-                    return true;
-                }
-                else
-                {
-                    SafeRemoveKey(key);
-                }
+                value = cachedItem.Value;
+                return true;
             }
-            value = default!;
-            return false;
+            else
+            {
+                items.TryRemove(key, out _);
+            }
         }
+        value = default!;
+        return false;
     }
 
     /// <summary>
@@ -115,7 +94,7 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// </summary>
     public MemoryCacheStorage()
     {
-        items = new Dictionary<TKey, CacheItem<TValue>>();
+        items = new ConcurrentDictionary<TKey, CacheItem<TValue>>();
     }
 
     /// <summary>
@@ -125,7 +104,7 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <param name="comparer">The comparer used to compare keys inside this cache storage.</param>
     public MemoryCacheStorage(IEqualityComparer<TKey> comparer)
     {
-        items = new Dictionary<TKey, CacheItem<TValue>>(comparer);
+        items = new ConcurrentDictionary<TKey, CacheItem<TValue>>(comparer);
     }
 
     /// <summary>
@@ -155,13 +134,10 @@ public class MemoryCacheStorage<TKey, TValue> :
     {
         get
         {
-            lock (items)
+            foreach (KeyValuePair<TKey, CacheItem<TValue>> kvp in items)
             {
-                foreach (KeyValuePair<TKey, CacheItem<TValue>> kvp in items)
-                {
-                    if (!kvp.Value.IsExpired())
-                        yield return kvp.Key;
-                }
+                if (!kvp.Value.IsExpired())
+                    yield return kvp.Key;
             }
         }
     }
@@ -171,13 +147,10 @@ public class MemoryCacheStorage<TKey, TValue> :
     {
         get
         {
-            lock (items)
+            foreach (KeyValuePair<TKey, CacheItem<TValue>> kvp in items)
             {
-                foreach (KeyValuePair<TKey, CacheItem<TValue>> kvp in items)
-                {
-                    if (!kvp.Value.IsExpired())
-                        yield return kvp.Value.Value;
-                }
+                if (!kvp.Value.IsExpired())
+                    yield return kvp.Value.Value;
             }
         }
     }
@@ -189,13 +162,7 @@ public class MemoryCacheStorage<TKey, TValue> :
     {
         get
         {
-            int count = 0;
-            using (var enumerator = GetEnumerator())
-            {
-                while (enumerator.MoveNext())
-                    count++;
-            }
-            return count;
+            return items.Count;
         }
     }
 
@@ -262,19 +229,15 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <returns>Returns the cached object or the value of the expression if the object is not already cached.</returns>
     public TValue GetOrAdd(TKey key, TimeSpan expiration, Func<TValue> getHandler)
     {
-        lock (items)
+        if (items.TryGetValue(key, out var cachedItem) && !cachedItem.IsExpired())
         {
-            if (TryGetCachedItem(key, out var cachedItem))
-            {
-                return cachedItem;
-            }
-            else
-            {
-                cachedItem = getHandler();
-                SetCachedItem(key, cachedItem, expiration, ReplaceItemAction.Dispose);
-                return cachedItem;
-            }
+            return cachedItem.Value;
         }
+
+        var newItem = new CacheItem<TValue>(getHandler(), DateTime.Now.Add(expiration));
+        items.AddOrUpdate(key, newItem, (k, old) => newItem);
+        AddItemCallback?.Invoke(this, newItem.Value);
+        return newItem.Value;
     }
 
     /// <summary>
@@ -288,29 +251,51 @@ public class MemoryCacheStorage<TKey, TValue> :
         return GetOrAdd(key, DefaultExpiration, getHandler);
     }
 
+    private readonly ConcurrentDictionary<TKey, TaskCompletionSource<TValue>> _asyncOperations = new ConcurrentDictionary<TKey, TaskCompletionSource<TValue>>();
+
     /// <summary>
     /// Gets the cached object from the specified key or invokes the expression asynchronously and caches its result for the specified time.
     /// </summary>
     /// <param name="key">The object key.</param>
-    /// <param name="expiration">The object expiration time.</param>
+    /// <param name="expiration">The cache expiration time.</param>
     /// <param name="getHandler">The async expression which results the <typeparamref name="TValue"/> to get.</param>
     /// <returns>Returns the cached object or the value of the expression if the object is not already cached.</returns>
-    public Task<TValue> GetOrAddAsync(TKey key, TimeSpan expiration, Func<Task<TValue>> getHandler)
+    public async Task<TValue> GetOrAddAsync(TKey key, TimeSpan expiration, Func<Task<TValue>> getHandler)
     {
-        lock (items)
+        // Try to get the item synchronously first
+        if (TryGetCachedItem(key, out var cachedValue))
         {
-            if (TryGetCachedItem(key, out var cachedItem))
+            return cachedValue;
+        }
+
+        // If not found, try to add a TaskCompletionSource for this key
+        var tcs = new TaskCompletionSource<TValue>();
+        var existingTcs = _asyncOperations.GetOrAdd(key, tcs);
+
+        if (existingTcs == tcs)
+        {
+            // This thread is responsible for executing the factory and setting the result
+            try
             {
-                return Task.FromResult(cachedItem);
+                var value = await getHandler().ConfigureAwait(false);
+                SetCachedItem(key, value, expiration, ReplaceItemAction.Dispose);
+                tcs.SetResult(value);
+                return value;
             }
-            else
+            catch (Exception ex)
             {
-                return getHandler().ContinueWith(task =>
-                {
-                    SetCachedItem(key, task.Result, expiration, ReplaceItemAction.Dispose);
-                    return task.Result;
-                });
+                tcs.SetException(ex);
+                throw;
             }
+            finally
+            {
+                _asyncOperations.TryRemove(key, out _);
+            }
+        }
+        else
+        {
+            // Another thread is already handling this key, wait for its result
+            return await existingTcs.Task;
         }
     }
 
@@ -331,16 +316,12 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <param name="key">The object key.</param>
     public bool ContainsKey(TKey key)
     {
-        lock (items)
+        if (items.TryGetValue(key, out var cachedItem))
         {
-            if (items.TryGetValue(key, out var cachedItem))
-            {
-                return !cachedItem.IsExpired();
-            }
-            return false;
+            return !cachedItem.IsExpired();
         }
+        return false;
     }
-
 
     /// <summary>
     /// Tries to remove an cached object from the specified key.
@@ -349,7 +330,12 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <returns>An boolean indicating if the object was removed or not.</returns>
     public bool Remove(TKey key)
     {
-        return SafeRemoveKey(key);
+        if (items.TryRemove(key, out var removedItem))
+        {
+            RemoveItemCallback?.Invoke(this, removedItem.Value);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -359,14 +345,12 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <returns>An boolean indicating if the object was removed or not.</returns>
     public bool RemoveIfExpired(TKey key)
     {
-        lock (items)
+        if (items.TryGetValue(key, out var cachedItem) && cachedItem.IsExpired())
         {
-            if (items.TryGetValue(key, out var cachedItem))
+            if (items.TryRemove(key, out var removedItem))
             {
-                if (cachedItem.IsExpired())
-                {
-                    return UnsafeRemoveKey(key);
-                }
+                RemoveItemCallback?.Invoke(this, removedItem.Value);
+                return true;
             }
         }
         return false;
@@ -386,50 +370,49 @@ public class MemoryCacheStorage<TKey, TValue> :
     /// <inheritdoc/>
     public int RemoveExpiredEntities()
     {
-        lock (items)
+        var expiredKeys = new List<TKey>();
+        foreach (var kvp in items)
         {
-            List<TKey> toRemove = new List<TKey>(items.Count);
-            foreach (KeyValuePair<TKey, CacheItem<TValue>> kvp in items)
+            if (kvp.Value.IsExpired())
             {
-                if (kvp.Value.IsExpired())
-                    toRemove.Add(kvp.Key);
+                expiredKeys.Add(kvp.Key);
             }
-
-            foreach (TKey key in toRemove)
-                UnsafeRemoveKey(key);
-
-            return toRemove.Count;
         }
+
+        int removedCount = 0;
+        foreach (var key in expiredKeys)
+        {
+            if (items.TryRemove(key, out var removedItem))
+            {
+                RemoveItemCallback?.Invoke(this, removedItem.Value);
+                removedCount++;
+            }
+        }
+        return removedCount;
     }
 
     /// <inheritdoc/>
     public void Clear()
     {
-        lock (items)
+        if (RemoveItemCallback is not null)
         {
-            if (RemoveItemCallback is not null)
+            foreach (var item in items.Values)
             {
-                foreach (var item in items)
-                {
-                    RemoveItemCallback(this, item.Value.Value);
-                }
+                RemoveItemCallback(this, item.Value);
             }
-
-            items.Clear();
         }
+
+        items.Clear();
     }
 
     /// <inheritdoc/>
     public IEnumerator<TValue> GetEnumerator()
     {
-        lock (items)
+        foreach (var item in items.Values)
         {
-            foreach (var item in items.Values)
+            if (!item.IsExpired())
             {
-                if (!item.IsExpired())
-                {
-                    yield return item.Value;
-                }
+                yield return item.Value;
             }
         }
     }

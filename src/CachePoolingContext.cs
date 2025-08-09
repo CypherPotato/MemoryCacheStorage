@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Concurrent;
 
 namespace CacheStorage;
 
@@ -8,19 +9,12 @@ namespace CacheStorage;
 public sealed class CachePoolingContext
 {
     internal System.Timers.Timer collectionTimer;
-    private static CachePoolingContext? shared;
+    private static readonly Lazy<CachePoolingContext> _shared = new(() => StartNew(TimeSpan.FromMinutes(10)));
 
     /// <summary>
     /// Gets the shared instance of <see cref="CachePoolingContext"/>.
     /// </summary>
-    public static CachePoolingContext Shared
-    {
-        get
-        {
-            shared ??= StartNew(TimeSpan.FromMinutes(10));
-            return shared;
-        }
-    }
+    public static CachePoolingContext Shared => _shared.Value;
 
     /// <summary>
     /// Gets or sets the pooling interval.
@@ -44,7 +38,7 @@ public sealed class CachePoolingContext
     /// Gets or sets an list of <see cref="ITimeToLiveCache"/> items which will be collected
     /// from the current pool.
     /// </summary>
-    public IList<ITimeToLiveCache> CollectingCaches { get; set; } = [];
+    public ConcurrentBag<ITimeToLiveCache> CollectingCaches { get; set; } = [];
 
     /// <summary>
     /// Creates an new instance of the <see cref="CachePoolingContext"/> class.
@@ -103,16 +97,12 @@ public sealed class CachePoolingContext
     /// </returns>
     public int CollectAll()
     {
-        lock (((ICollection)CollectingCaches).SyncRoot)
+        int count = 0;
+        foreach (var cache in CollectingCaches)
         {
-            int count = 0;
-            for (int i = 0; i < CollectingCaches.Count; i++)
-            {
-                var cache = CollectingCaches[i];
-                count += cache.RemoveExpiredEntities();
-            }
-            return count;
+            count += cache.RemoveExpiredEntities();
         }
+        return count;
     }
 
     /// <summary>
@@ -126,8 +116,10 @@ public sealed class CachePoolingContext
     /// </remarks>
     public TCache Collect<TCache>(TCache instance) where TCache : ITimeToLiveCache
     {
-        if (!CollectingCaches.Contains(instance))
-            CollectingCaches.Add(instance);
+        if (CollectingCaches.Contains(instance))
+            return instance;
+
+        CollectingCaches.Add(instance);
         return instance;
     }
 }

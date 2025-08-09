@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Concurrent;
 
 namespace CacheStorage;
 
@@ -6,23 +7,16 @@ namespace CacheStorage;
 /// Represents an TTL list implementation, where it's items expires after some time.
 /// </summary>
 /// <typeparam name="TValue">The object type of the list.</typeparam>
-public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedCallbackHandler<TValue>, IReadOnlyList<TValue>, ICollection
+public sealed class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedCallbackHandler<TValue>, IReadOnlyList<TValue>, ICollection
 {
-    private List<CacheItem<TValue>> items;
-    private static MemoryCacheList<TValue>? shared;
+    private ConcurrentBag<CacheItem<TValue>> items;
+    private static Lazy<MemoryCacheList<TValue>> shared = new Lazy<MemoryCacheList<TValue>>(() => CachePoolingContext.Shared.Collect(new MemoryCacheList<TValue>()));
 
     /// <summary>
     /// Gets the shared instance of <see cref="MemoryCacheList{TValue}"/>, which is linked to the shared
     /// <see cref="CachePoolingContext"/>.
     /// </summary>
-    public static MemoryCacheList<TValue> Shared
-    {
-        get
-        {
-            shared ??= CachePoolingContext.Shared.Collect(new MemoryCacheList<TValue>());
-            return shared;
-        }
-    }
+    public static MemoryCacheList<TValue> Shared => shared.Value;
 
     /// <summary>
     /// Creates an new <see cref="MemoryCacheList{TValue}"/> from the specified parameters.
@@ -39,39 +33,32 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
 
     internal bool SetCachedItem(TValue item, TimeSpan expiration)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            if (AddItemCallback is not null)
-                AddItemCallback(this, item);
+        if (AddItemCallback is not null)
+            AddItemCallback(this, item);
 
-            items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(expiration)));
-        }
+        items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(expiration)));
         return true;
     }
 
     internal TValue GetByIndex(int index)
     {
-        lock (((ICollection)items).SyncRoot)
+        var item = items.ElementAt(index);
+        if (item.IsExpired())
         {
-            var item = items[index];
-            if (item.IsExpired())
-            {
-                throw new IndexOutOfRangeException("The specified index was not defined or the item at the specified index has expired.");
-            }
-            return item.Value;
+            throw new IndexOutOfRangeException("The specified index was not defined or the item at the specified index has expired.");
         }
+        return item.Value;
     }
 
     internal void SetByIndex(int index, TValue item)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            if (items.Count > index)
-                RemoveItemCallback?.Invoke(this, items[index].Value);
+        var oldItem = items.ElementAt(index);
+        RemoveItemCallback?.Invoke(this, oldItem.Value);
 
-            AddItemCallback?.Invoke(this, item);
-            items[index] = new CacheItem<TValue>(item, DateTime.Now.Add(DefaultExpiration));
-        }
+        AddItemCallback?.Invoke(this, item);
+        // ConcurrentBag does not support direct replacement by index, so we add it to the end
+        // instead setting the index
+        items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(DefaultExpiration)));
     }
 
     /// <inheritdoc/>
@@ -84,13 +71,7 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     {
         get
         {
-            int count = 0;
-            using (var enumerator = GetEnumerator())
-            {
-                while (enumerator.MoveNext())
-                    count++;
-            }
-            return count;
+            return items.Count(i => !i.IsExpired());
         }
     }
 
@@ -136,23 +117,17 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <param name="duration">The expiration time.</param>
     public void AddOrRenew(TValue item, TimeSpan duration)
     {
-        lock (((ICollection)items).SyncRoot)
+        var existingItem = items.FirstOrDefault(i => i.Value?.Equals(item) == true);
+        if (existingItem != null)
         {
-            for (int i1 = 0; i1 < items.Count; i1++)
-            {
-                CacheItem<TValue> i = items[i1];
-                if (i.Value?.Equals(item) == true)
-                {
-                    i.ExpiresAt = DateTime.Now + duration;
-                    return;
-                }
-            }
-
-            // if the item was not found, add it
-            AddItemCallback?.Invoke(this, item);
-
-            items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(duration)));
+            existingItem.ExpiresAt = DateTime.Now + duration;
+            return;
         }
+
+        // if the item was not found, add it
+        AddItemCallback?.Invoke(this, item);
+
+        items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(duration)));
     }
 
     /// <summary>
@@ -165,19 +140,15 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <inheritdoc/>
     public void Clear()
     {
-        lock (((ICollection)items).SyncRoot)
+        if (RemoveItemCallback is not null)
         {
-            if (RemoveItemCallback is not null)
+            foreach (var i in items)
             {
-                for (int i1 = 0; i1 < items.Count; i1++)
-                {
-                    CacheItem<TValue>? i = items[i1];
-                    RemoveItemCallback(this, i.Value);
-                }
+                RemoveItemCallback(this, i.Value);
             }
-
-            items.Clear();
         }
+
+        items = [];
     }
 
     /// <summary>
@@ -188,12 +159,9 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <returns></returns>
     public bool Contains(TValue item)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            foreach (var i in items)
-                if (!i.IsExpired() && i.Value?.Equals(item) == true)
-                    return true;
-        }
+        foreach (var i in items)
+            if (!i.IsExpired() && i.Value?.Equals(item) == true)
+                return true;
         return false;
     }
 
@@ -202,24 +170,18 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// </summary>
     public void CopyTo(TValue[] array, int arrayIndex)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            this.ToArray().CopyTo(array, arrayIndex);
-        }
+        var nonExpiredItems = items.Where(item => !item.IsExpired()).Select(item => item.Value).ToArray();
+        nonExpiredItems.CopyTo(array, arrayIndex);
     }
 
     /// <inheritdoc/>
     public IEnumerator<TValue> GetEnumerator()
     {
-        lock (((ICollection)items).SyncRoot)
+        foreach (var item in items)
         {
-            for (int i = 0; i < items.Count; i++)
+            if (!item.IsExpired())
             {
-                CacheItem<TValue> item = items[i];
-                if (!item.IsExpired())
-                {
-                    yield return item.Value;
-                }
+                yield return item.Value;
             }
         }
     }
@@ -227,10 +189,19 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <inheritdoc/>
     public int IndexOf(TValue item)
     {
-        lock (((ICollection)items).SyncRoot)
+        int nonExpiredIndex = 0;
+        foreach (var current in items)
         {
-            return this.ToList().IndexOf(item);
+            if (!current.IsExpired())
+            {
+                if (current.Value?.Equals(item) == true)
+                {
+                    return nonExpiredIndex;
+                }
+                nonExpiredIndex++;
+            }
         }
+        return -1;
     }
 
     /// <inheritdoc/>
@@ -244,30 +215,37 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <param name="expiresAt">The timespan after which the item expires.</param>
     public void Insert(int index, TValue item, TimeSpan expiresAt)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            CacheItem<TValue> c = new CacheItem<TValue>(item, DateTime.Now.Add(expiresAt));
+        CacheItem<TValue> c = new CacheItem<TValue>(item, DateTime.Now.Add(expiresAt));
 
-            AddItemCallback?.Invoke(this, item);
-            items.Insert(index, c);
-        }
+        AddItemCallback?.Invoke(this, item);
+        var tempList = items.ToList();
+        tempList.Insert(index, c);
+        items = [.. tempList];
     }
 
     /// <inheritdoc/>
     public bool Remove(TValue item)
     {
-        lock (((ICollection)items).SyncRoot)
+        CacheItem<TValue>? itemToRemove = null;
+        foreach (var i in items)
         {
-            for (int i = 0; i < items.Count; i++)
+            if (i.Value?.Equals(item) == true)
             {
-                var value = items[i].Value;
-                if (value?.Equals(item) == true)
-                {
-                    RemoveItemCallback?.Invoke(this, value);
-                    items.RemoveAt(i);
-                    break;
-                }
+                itemToRemove = i;
+                break;
             }
+        }
+
+        if (itemToRemove != null)
+        {
+            if (RemoveItemCallback is not null)
+            {
+                RemoveItemCallback(this, itemToRemove.Value);
+            }
+            // ConcurrentBag does not have a direct Remove method for a specific item.
+            // We create a new bag excluding the item to remove.
+            items = [.. items.Where(i => i != itemToRemove)];
+            return true;
         }
         return false;
     }
@@ -275,12 +253,9 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <inheritdoc/>
     public void RemoveAt(int index)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            var value = items[index].Value;
-            RemoveItemCallback?.Invoke(this, value);
-            items.RemoveAt(index);
-        }
+        var itemToRemove = items.ElementAt(index);
+        RemoveItemCallback?.Invoke(this, itemToRemove.Value);
+        items = [.. items.Where((x, i) => i != index)];
     }
 
     IEnumerator IEnumerable.GetEnumerator()
@@ -291,29 +266,28 @@ public class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, ICachedC
     /// <inheritdoc/>
     public int RemoveExpiredEntities()
     {
-        lock (((ICollection)items).SyncRoot)
+        int removedCount = 0;
+        var newBag = new ConcurrentBag<CacheItem<TValue>>();
+        foreach (var item in items)
         {
-            int removedCount = 0;
-            for (int i = items.Count - 1; i >= 0; i--)
+            if (item.IsExpired())
             {
-                if (items[i].IsExpired())
-                {
-                    RemoveItemCallback?.Invoke(this, items[i].Value);
-                    RemoveAt(i);
-                    removedCount++;
-                }
+                RemoveItemCallback?.Invoke(this, item.Value);
+                removedCount++;
             }
-
-            return removedCount;
+            else
+            {
+                newBag.Add(item);
+            }
         }
+        items = newBag;
+        return removedCount;
     }
 
     /// <inheritdoc/>
     public void CopyTo(Array array, int index)
     {
-        lock (((ICollection)items).SyncRoot)
-        {
-            ((ICollection)items).CopyTo(array, index);
-        }
+        var nonExpiredItems = items.Where(item => !item.IsExpired()).Select(item => item.Value).ToArray();
+        Array.Copy(nonExpiredItems, 0, array, index, nonExpiredItems.Length);
     }
 }
