@@ -1,4 +1,7 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿
+using System.Diagnostics.CodeAnalysis;
+using System.Threading;
+
 
 namespace CacheStorage;
 
@@ -74,6 +77,8 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
         }
     }
 
+    private readonly SemaphoreSlim _asyncLock = new SemaphoreSlim(1, 1);
+
     /// <summary>
     /// Gets the cached object if not expired or sets it's value from the specified function.
     /// </summary>
@@ -101,26 +106,27 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     /// <param name="obtainFunc">The async function that returns <typeparamref name="TValue"/>.</param>
     public async Task<TValue> GetOrSetAsync(Func<Task<TValue>> obtainFunc)
     {
-        Task<TValue>? obtainTask = null;
-        lock (this)
+        if (HasValue)
         {
-            if (HasValue)
-            {
-                return _item.Value;
-            }
-            obtainTask = obtainFunc();
+            return Value!;
         }
 
-        TValue value = await obtainTask.ConfigureAwait(false);
-
-        lock (this)
+        await _asyncLock.WaitAsync().ConfigureAwait(false);
+        try
         {
+            // Double-check after acquiring the lock
             if (HasValue)
             {
-                return _item.Value;
+                return Value!;
             }
-            Value = value;
+
+            var value = await obtainFunc().ConfigureAwait(false);
+            _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
             return value;
+        }
+        finally
+        {
+            _asyncLock.Release();
         }
     }
 
