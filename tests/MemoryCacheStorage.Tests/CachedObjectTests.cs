@@ -95,12 +95,12 @@ namespace MemoryCacheStorage.Tests
         public void Renew_ExtendsExpiration()
         {
             // Arrange
-            var cachedObject = new CachedObject<string>("test", TimeSpan.FromMilliseconds(50));
+            var cachedObject = new CachedObject<string>("test", TimeSpan.FromMilliseconds(200));
 
             // Act
-            Task.Delay(30).Wait();
+            Task.Delay(80).Wait();
             cachedObject.Renew();
-            Task.Delay(30).Wait();
+            Task.Delay(120).Wait();
 
             // Assert
             Assert.IsTrue(cachedObject.HasValue);

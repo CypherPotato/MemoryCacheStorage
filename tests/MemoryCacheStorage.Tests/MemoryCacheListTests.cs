@@ -131,5 +131,28 @@ namespace MemoryCacheStorage.Tests
             // Assert
             Assert.AreEqual("b", list[1]);
         }
+
+        [TestMethod]
+        public void CopyTo_SkipsExpiredItems()
+        {
+            // Arrange
+            var list = new MemoryCacheList<string>();
+            list.Add("first");
+            list.Add("transient", TimeSpan.FromMilliseconds(20));
+            list.Add("second");
+
+            Task.Delay(40).Wait();
+
+            // Act
+            var target = new string[2];
+            list.CopyTo(target, 0);
+
+            var secondTarget = new string[2];
+            ((System.Collections.ICollection)list).CopyTo(secondTarget, 0);
+
+            // Assert
+            CollectionAssert.AreEquivalent(new[] { "first", "second" }, target);
+            CollectionAssert.AreEquivalent(new[] { "first", "second" }, secondTarget);
+        }
     }
 }
