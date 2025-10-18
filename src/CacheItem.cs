@@ -10,7 +10,7 @@ internal class CacheItem<TValue>
     public TValue Value { get; set; }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool IsExpired() => DateTime.Now > ExpiresAt;
+    public bool IsExpired() => DateTime.UtcNow > ExpiresAt;
 
     public CacheItem(TValue value, DateTime expiresAt)
     {

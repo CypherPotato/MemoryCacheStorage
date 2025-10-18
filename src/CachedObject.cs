@@ -1,6 +1,5 @@
 ﻿
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
 
 
 namespace CacheStorage;
@@ -26,11 +25,12 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     {
         get
         {
-            lock (this)
+            _asyncLock.Wait();
+            try
             {
                 if (_item.IsExpired())
                 {
-                    Clear();
+                    UnsafeClear();
                     return default;
                 }
                 else
@@ -38,20 +38,29 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
                     return _item.Value;
                 }
             }
+            finally
+            {
+                _asyncLock.Release();
+            }
         }
         set
         {
-            lock (this)
+            _asyncLock.Wait();
+            try
             {
-                Clear();
+                (_item.Value as IDisposable)?.Dispose();
                 if (value is null)
                 {
-                    _item = CacheItem<TValue>.Empty;
+                    UnsafeClear();
                 }
                 else
                 {
-                    _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
+                    _item = new CacheItem<TValue>(value, DateTime.UtcNow.Add(Expiration));
                 }
+            }
+            finally
+            {
+                _asyncLock.Release();
             }
         }
     }
@@ -64,15 +73,22 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     {
         get
         {
-            lock (this)
+            _asyncLock.Wait();
+            try
             {
                 if (_item.IsExpired())
                 {
-                    Clear();
+                    UnsafeClear();
                     return false;
                 }
                 else
+                {
                     return true;
+                }
+            }
+            finally
+            {
+                _asyncLock.Release();
             }
         }
     }
@@ -85,18 +101,28 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     /// <param name="obtainFunc">The function that returns <typeparamref name="TValue"/>.</param>
     public TValue GetOrSet(Func<TValue> obtainFunc)
     {
-        lock (this)
+        if (!_item.IsExpired())
         {
-            if (HasValue)
+            return _item.Value;
+        }
+
+        _asyncLock.Wait();
+        try
+        {
+            if (!_item.IsExpired())
             {
                 return _item.Value;
             }
             else
             {
                 TValue tval = obtainFunc();
-                Value = tval;
+                _item = new CacheItem<TValue>(tval, DateTime.UtcNow.Add(Expiration));
                 return tval;
             }
+        }
+        finally
+        {
+            _asyncLock.Release();
         }
     }
 
@@ -106,22 +132,22 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     /// <param name="obtainFunc">The async function that returns <typeparamref name="TValue"/>.</param>
     public async Task<TValue> GetOrSetAsync(Func<Task<TValue>> obtainFunc)
     {
-        if (HasValue)
+        if (!_item.IsExpired())
         {
-            return Value!;
+            return _item.Value;
         }
 
         await _asyncLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            // Double-check after acquiring the lock
-            if (HasValue)
+            if (!_item.IsExpired())
             {
-                return Value!;
+                return _item.Value;
             }
 
             var value = await obtainFunc().ConfigureAwait(false);
-            _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
+            _item = new CacheItem<TValue>(value, DateTime.UtcNow.Add(Expiration));
+
             return value;
         }
         finally
@@ -135,10 +161,7 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     /// </summary>
     public void Renew()
     {
-        lock (this)
-        {
-            _item.ExpiresAt = DateTime.Now.Add(Expiration);
-        }
+        Renew(Expiration);
     }
 
     /// <summary>
@@ -148,9 +171,14 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     /// <param name="expiration">The amount of time to give to the object before it expires.</param>
     public void Renew(TimeSpan expiration)
     {
-        lock (this)
+        _asyncLock.Wait();
+        try
         {
-            _item.ExpiresAt = DateTime.Now.Add(expiration);
+            _item.ExpiresAt = DateTime.UtcNow.Add(expiration);
+        }
+        finally
+        {
+            _asyncLock.Release();
         }
     }
 
@@ -159,11 +187,21 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     /// </summary>
     public void Clear()
     {
-        lock (this)
+        _asyncLock.Wait();
+        try
         {
-            (_item.Value as IDisposable)?.Dispose();
-            _item = CacheItem<TValue>.Empty;
+            UnsafeClear();
         }
+        finally
+        {
+            _asyncLock.Release();
+        }
+    }
+
+    void UnsafeClear()
+    {
+        (_item.Value as IDisposable)?.Dispose();
+        _item = CacheItem<TValue>.Empty;
     }
 
     /// <summary>
@@ -185,7 +223,14 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     {
         if (other is CachedObject<TValue>)
         {
-            return Value?.Equals(other.Value) == true;
+            if (Value is null)
+            {
+                return other.Value is null;
+            }
+            else
+            {
+                return Value.Equals(other.Value);
+            }
         }
         return false;
     }
@@ -216,7 +261,7 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     public CachedObject(TValue value)
     {
         Expiration = TimeSpan.FromMinutes(10);
-        _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
+        _item = new CacheItem<TValue>(value, DateTime.UtcNow.Add(Expiration));
     }
 
     /// <summary>

@@ -1,8 +1,4 @@
-
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CacheStorage;
-using System;
-using System.Threading.Tasks;
 
 namespace MemoryCacheStorage.Tests
 {
@@ -53,6 +49,19 @@ namespace MemoryCacheStorage.Tests
 
             // Act
             Task.Delay(20).Wait();
+
+            // Assert
+            Assert.IsFalse(cachedObject.HasValue);
+        }
+
+        [TestMethod]
+        public void HasValue_IsFalse_WhenExpired_PreciseAlt()
+        {
+            // Arrange
+            var cachedObject = new CachedObject<string>("test", TimeSpan.FromMilliseconds(10));
+
+            // Act
+            Thread.Sleep(11);
 
             // Assert
             Assert.IsFalse(cachedObject.HasValue);

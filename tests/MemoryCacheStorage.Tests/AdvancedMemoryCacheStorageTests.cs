@@ -12,6 +12,39 @@ namespace MemoryCacheStorage.Tests
     public class AdvancedMemoryCacheStorageTests
     {
         [TestMethod]
+        public async Task GetOrAdd_FactoryIsOnlyCalledOnce_OnConcurrentAccess()
+        {
+            // Arrange
+            var cache = new MemoryCacheStorage<string, int>();
+            var key = "concurrentKey";
+            int factoryExecutionCount = 0;
+
+            Func<int> factory = () =>
+            {
+                Interlocked.Increment(ref factoryExecutionCount);
+                Thread.Sleep(Random.Shared.Next(50, 200)); // Simulate work
+                return 42;
+            };
+
+            // Act
+            var tasks = new Task<int>[100];
+            for (int i = 0; i < tasks.Length; i++)
+            {
+                tasks[i] = Task.Run(() => cache.GetOrAdd(key, factory));
+            }
+
+            await Task.WhenAll(tasks);
+
+            // Assert
+            Assert.AreEqual(1, factoryExecutionCount, "The factory method should only be executed once.");
+            foreach (var task in tasks)
+            {
+                Assert.AreEqual(42, task.Result, "All concurrent callers should receive the value from the single factory execution.");
+            }
+            Assert.AreEqual(1, cache.Count);
+        }
+
+        [TestMethod]
         public async Task GetOrAddAsync_FactoryIsOnlyCalledOnce_OnConcurrentAccess()
         {
             // Arrange

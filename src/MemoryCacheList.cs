@@ -33,10 +33,9 @@ public sealed class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, I
 
     internal bool SetCachedItem(TValue item, TimeSpan expiration)
     {
-        if (AddItemCallback is not null)
-            AddItemCallback(this, item);
+        AddItemCallback?.Invoke(this, item);
 
-        items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(expiration)));
+        items.Add(new CacheItem<TValue>(item, DateTime.UtcNow.Add(expiration)));
         return true;
     }
 
@@ -58,7 +57,7 @@ public sealed class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, I
         AddItemCallback?.Invoke(this, item);
         // ConcurrentBag does not support direct replacement by index, so we add it to the end
         // instead setting the index
-        items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(DefaultExpiration)));
+        items.Add(new CacheItem<TValue>(item, DateTime.UtcNow.Add(DefaultExpiration)));
     }
 
     /// <inheritdoc/>
@@ -120,14 +119,14 @@ public sealed class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, I
         var existingItem = items.FirstOrDefault(i => i.Value?.Equals(item) == true);
         if (existingItem != null)
         {
-            existingItem.ExpiresAt = DateTime.Now + duration;
+            existingItem.ExpiresAt = DateTime.UtcNow + duration;
             return;
         }
 
         // if the item was not found, add it
         AddItemCallback?.Invoke(this, item);
 
-        items.Add(new CacheItem<TValue>(item, DateTime.Now.Add(duration)));
+        items.Add(new CacheItem<TValue>(item, DateTime.UtcNow.Add(duration)));
     }
 
     /// <summary>
@@ -215,7 +214,7 @@ public sealed class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, I
     /// <param name="expiresAt">The timespan after which the item expires.</param>
     public void Insert(int index, TValue item, TimeSpan expiresAt)
     {
-        CacheItem<TValue> c = new CacheItem<TValue>(item, DateTime.Now.Add(expiresAt));
+        CacheItem<TValue> c = new CacheItem<TValue>(item, DateTime.UtcNow.Add(expiresAt));
 
         AddItemCallback?.Invoke(this, item);
         var tempList = items.ToList();

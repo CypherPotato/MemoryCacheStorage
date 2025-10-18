@@ -40,7 +40,7 @@ public sealed class MemoryCacheStorage<TKey, TValue> :
 
     internal bool SetCachedItem(TKey key, TValue item, TimeSpan expiration, ReplaceItemAction replaceAction)
     {
-        var newCacheItem = new CacheItem<TValue>(item, DateTime.Now.Add(expiration));
+        var newCacheItem = new CacheItem<TValue>(item, DateTime.UtcNow.Add(expiration));
 
         while (true)
         {
