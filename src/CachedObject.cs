@@ -1,6 +1,4 @@
-﻿
-using System.Diagnostics.CodeAnalysis;
-
+﻿using System.Diagnostics.CodeAnalysis;
 
 namespace CacheStorage;
 
@@ -174,7 +172,10 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
         _asyncLock.Wait();
         try
         {
-            _item.ExpiresAt = DateTime.UtcNow.Add(expiration);
+            if (!_item.IsExpired())
+            {
+                _item = new CacheItem<TValue>(_item.Value, DateTime.UtcNow.Add(expiration));
+            }
         }
         finally
         {
@@ -271,7 +272,7 @@ public sealed class CachedObject<TValue> : ITimeToLiveCache, IEquatable<TValue>,
     public CachedObject(TValue value, TimeSpan expiresIn)
     {
         Expiration = expiresIn;
-        _item = new CacheItem<TValue>(value, DateTime.Now.Add(Expiration));
+        _item = new CacheItem<TValue>(value, DateTime.UtcNow.Add(Expiration));
     }
 
     /// <inheritdoc/>

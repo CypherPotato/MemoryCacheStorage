@@ -2,12 +2,12 @@
 
 namespace CacheStorage;
 
-internal class CacheItem<TValue>
+internal sealed class CacheItem<TValue>
 {
-    public static CacheItem<TValue> Empty = new CacheItem<TValue>(default!, DateTime.MinValue);
+    public static readonly CacheItem<TValue> Empty = new(default!, DateTime.MinValue);
 
-    public DateTime ExpiresAt { get; set; }
-    public TValue Value { get; set; }
+    public DateTime ExpiresAt { get; }
+    public TValue Value { get; }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsExpired() => DateTime.UtcNow > ExpiresAt;

@@ -119,13 +119,12 @@ public sealed class MemoryCacheList<TValue> : IList<TValue>, ITimeToLiveCache, I
         var existingItem = items.FirstOrDefault(i => i.Value?.Equals(item) == true);
         if (existingItem != null)
         {
-            existingItem.ExpiresAt = DateTime.UtcNow + duration;
+            var newItem = new CacheItem<TValue>(item, DateTime.UtcNow.Add(duration));
+            items = new ConcurrentBag<CacheItem<TValue>>(items.Where(i => i != existingItem).Append(newItem));
             return;
         }
 
-        // if the item was not found, add it
         AddItemCallback?.Invoke(this, item);
-
         items.Add(new CacheItem<TValue>(item, DateTime.UtcNow.Add(duration)));
     }
 
